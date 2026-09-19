@@ -1,0 +1,26 @@
+[
+  {
+    "nodePoolName": "hgx-h100-8x-ib",
+    "region": "US-EAST-1",
+    "gpuType": "H100-80GB-HGX",
+    "gpuQty": 8,
+    "hourlyRateUsd": 32.5,
+    "vCPU": 224,
+    "ramGiB": 2048,
+    "ephemeralStorageGiB": 20000,
+    "fabric": "InfiniBand NDR400",
+    "commitment": "reserved"
+  },
+  {
+    "nodePoolName": "hgx-h100-8x-ib",
+    "region": "US-LAS1",
+    "gpuType": "H100-80GB-HGX",
+    "gpuQty": 8,
+    "hourlyRateUsd": 30.75,
+    "vCPU": 224,
+    "ramGiB": 2048,
+    "ephemeralStorageGiB": 20000,
+    "fabric": "InfiniBand NDR400",
+    "commitment": "on_demand"
+  }
+]

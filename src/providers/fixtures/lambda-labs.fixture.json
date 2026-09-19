@@ -1,0 +1,47 @@
+[
+  {
+    "name": "gpu_8x_h100_sxm5",
+    "region_name": "us-east-1",
+    "price_cents_per_hour": 2712,
+    "specs": {
+      "gpus": 8,
+      "gpu_description": "H100 80GB SXM5",
+      "vcpus": 208,
+      "memory_gib": 1800,
+      "storage_gib": 24576
+    },
+    "interconnect": "InfiniBand (3.2 Tbps)",
+    "capacity": "on_demand",
+    "availability": "available"
+  },
+  {
+    "name": "gpu_8x_h100_sxm5",
+    "region_name": "us-west-1",
+    "price_cents_per_hour": 2790,
+    "specs": {
+      "gpus": 8,
+      "gpu_description": "H100 80GB SXM5",
+      "vcpus": 208,
+      "memory_gib": 1800,
+      "storage_gib": 24576
+    },
+    "interconnect": "InfiniBand (3.2 Tbps)",
+    "capacity": "on_demand",
+    "availability": "available"
+  },
+  {
+    "name": "gpu_4x_h100_pcie",
+    "region_name": "us-east-1",
+    "price_cents_per_hour": 1180,
+    "specs": {
+      "gpus": 4,
+      "gpu_description": "H100 80GB PCIe",
+      "vcpus": 104,
+      "memory_gib": 900,
+      "storage_gib": 12288
+    },
+    "interconnect": "PCIe",
+    "capacity": "on_demand",
+    "availability": "available"
+  }
+]

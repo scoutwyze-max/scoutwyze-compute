@@ -1,0 +1,50 @@
+[
+  {
+    "gpuTypeId": "H100_80GB_SXM",
+    "gpuCount": 8,
+    "dataCenter": "US-TX-1",
+    "cloudType": "SECURE",
+    "pricePerGpuHr": 2.79,
+    "vcpuCount": 192,
+    "memoryInGb": 1500,
+    "containerDiskInGb": 4000,
+    "networkFabric": "InfiniBand",
+    "spotPrice": null
+  },
+  {
+    "gpuTypeId": "H100_80GB_SXM",
+    "gpuCount": 8,
+    "dataCenter": "US-CA-2",
+    "cloudType": "SECURE",
+    "pricePerGpuHr": 2.65,
+    "vcpuCount": 192,
+    "memoryInGb": 1500,
+    "containerDiskInGb": 4000,
+    "networkFabric": "InfiniBand",
+    "spotPrice": 1.89
+  },
+  {
+    "gpuTypeId": "H100_80GB_SXM",
+    "gpuCount": 8,
+    "dataCenter": "US-NJ-1",
+    "cloudType": "COMMUNITY",
+    "pricePerGpuHr": null,
+    "vcpuCount": 192,
+    "memoryInGb": 1500,
+    "containerDiskInGb": 4000,
+    "networkFabric": "InfiniBand",
+    "spotPrice": 1.72
+  },
+  {
+    "gpuTypeId": "H100_80GB_SXM",
+    "gpuCount": 8,
+    "dataCenter": "US-WA-1",
+    "cloudType": "COMMUNITY",
+    "pricePerGpuHr": null,
+    "vcpuCount": null,
+    "memoryInGb": 1500,
+    "containerDiskInGb": 4000,
+    "networkFabric": "InfiniBand",
+    "spotPrice": null
+  }
+]

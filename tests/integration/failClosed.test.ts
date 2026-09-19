@@ -1,0 +1,79 @@
+import { describe, expect, it, afterEach } from "vitest";
+import Fastify, { type FastifyInstance } from "fastify";
+import { IngestionCache } from "../../src/ingestion/cache.js";
+import { lambdaLabsAdapter } from "../../src/providers/lambdaLabs.js";
+import { runpodAdapter } from "../../src/providers/runpod.js";
+import { registerQuoteRoute } from "../../src/api/routes/quote.js";
+import type { ProviderAdapter } from "../../src/providers/types.js";
+
+let app: FastifyInstance | undefined;
+
+afterEach(async () => {
+  await app?.close();
+  app = undefined;
+});
+
+const brokenCoreweaveAdapter: ProviderAdapter = {
+  id: "coreweave",
+  async fetch() {
+    throw new Error("simulated schema change / feed outage");
+  },
+};
+
+const API_KEY = "fail_closed_test_key";
+
+async function buildAppWithBrokenCoreweave(): Promise<FastifyInstance> {
+  const built = Fastify({ logger: false });
+  const cache = new IngestionCache([lambdaLabsAdapter, runpodAdapter, brokenCoreweaveAdapter]);
+  await cache.ingestAll();
+  registerQuoteRoute(built, { cache, validApiKeys: new Set([API_KEY]), quoteTtlSeconds: 300 });
+  return built;
+}
+
+describe("CLAUDE.md §2 Fail-Closed Rule", () => {
+  it("a broken provider feed is excluded and explicitly reported, never silently fabricated or skipped without a trace", async () => {
+    app = await buildAppWithBrokenCoreweave();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/route/quote",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+
+    // coreweave contributes zero quotes...
+    expect(body.quotes.some((q: any) => q.provider_observed.provider === "coreweave")).toBe(false);
+    // ...and that absence is explained, not silent.
+    const excluded = body.excluded_providers.find((e: any) => e.provider === "coreweave");
+    expect(excluded).toBeDefined();
+    expect(excluded.reason).toMatch(/simulated schema change/);
+  });
+
+  it("the other 2 providers' last-good data still serves normally — one broken feed does not take down the whole response", async () => {
+    app = await buildAppWithBrokenCoreweave();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/route/quote",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {},
+    });
+
+    const body = res.json();
+    const providers = new Set(body.quotes.map((q: any) => q.provider_observed.provider));
+    expect(providers.has("lambda_labs")).toBe(true);
+    expect(providers.has("runpod")).toBe(true);
+  });
+
+  it("a provider that has never successfully ingested contributes nothing rather than serving undefined/stale data", async () => {
+    const cache = new IngestionCache([brokenCoreweaveAdapter]);
+    // Deliberately not calling ingestAll() — this is the boot-time,
+    // never-yet-ingested state.
+    const states = cache.getStates();
+    expect(states[0]?.status).toBe("failed");
+    expect(states[0]?.facts).toHaveLength(0);
+  });
+});
