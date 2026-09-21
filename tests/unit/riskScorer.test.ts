@@ -21,6 +21,28 @@ describe("riskCategoryFromScore", () => {
     expect(riskCategoryFromScore(0.25)).toBe("medium");
     expect(riskCategoryFromScore(0.65)).toBe("high");
   });
+
+  it("resolves exact boundary values deterministically (< not <=, so a score AT a threshold rounds up)", () => {
+    // RISK_CATEGORY_THRESHOLDS = { low: 0.15, medium: 0.4 } — a score of
+    // exactly 0.15 is NOT low (it takes the medium bucket), and exactly
+    // 0.4 is NOT medium (it takes high). This is the kind of off-by-one
+    // that's easy to get backwards silently, so it's locked in explicitly
+    // rather than only tested via the capacity-type presets, which never
+    // happen to land exactly on a boundary.
+    expect(riskCategoryFromScore(0.15)).toBe("medium");
+    expect(riskCategoryFromScore(0.149999)).toBe("low");
+    expect(riskCategoryFromScore(0.4)).toBe("high");
+    expect(riskCategoryFromScore(0.399999)).toBe("medium");
+  });
+
+  it("real capacity-type presets each land in their intended category", () => {
+    // Guards against someone tweaking INTERRUPTION_RISK_BY_CAPACITY_TYPE
+    // in constants.ts and accidentally shifting a capacity type into the
+    // wrong risk bucket without noticing.
+    expect(riskCategoryFromScore(scoreAvailabilityRisk("reserved"))).toBe("low");
+    expect(riskCategoryFromScore(scoreAvailabilityRisk("on_demand"))).toBe("medium");
+    expect(riskCategoryFromScore(scoreAvailabilityRisk("spot"))).toBe("high");
+  });
 });
 
 describe("isWithinRiskTolerance", () => {

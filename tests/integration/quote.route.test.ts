@@ -1,6 +1,7 @@
 import { describe, expect, it, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildTestApp } from "./testApp.js";
+import { RouteQuoteResponse } from "../../src/types/schema.js";
 
 let app: FastifyInstance | undefined;
 
@@ -101,5 +102,24 @@ describe("POST /v1/route/quote", () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("invalid_request");
+  });
+
+  it("the real, JSON-serialized HTTP response body validates against RouteQuoteResponse end to end", async () => {
+    // provenance.test.ts validates the router's in-memory return value
+    // against the schema — this validates what actually goes over the
+    // wire after Fastify's own JSON serialization, which is the thing a
+    // real caller (or their own schema validator) actually receives.
+    const built = await buildTestApp();
+    app = built.app;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/route/quote",
+      headers: { authorization: `Bearer ${built.apiKey}` },
+      payload: { workload_type: "fine_tuning" },
+    });
+
+    const parsed = RouteQuoteResponse.safeParse(res.json());
+    expect(parsed.success).toBe(true);
   });
 });

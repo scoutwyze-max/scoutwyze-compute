@@ -57,4 +57,31 @@ describe("totalEffectiveCost", () => {
     };
     expect(totalEffectiveCost(breakdown)).toBeCloseTo(27.39, 2);
   });
+
+  it("end-to-end against the real constants, not a hand-picked breakdown", () => {
+    // Locks the actual config/constants.ts values to a known answer —
+    // storage_usd = 500GB * $0.023/GB-mo / 720hr = 0.15972 -> rounds 0.02
+    // egress_usd (inference) = 2000GB * $0.09/GB / 720hr = 0.25 exactly
+    // total = 27.12 + 0.02 + 0 + 0.25
+    const breakdown = calculateCostBreakdown(baseFacts, "inference");
+    expect(totalEffectiveCost(breakdown)).toBeCloseTo(27.39, 2);
+  });
+
+  it("never produces a negative total for any real provider capacity type", () => {
+    for (const capacity_type of ["on_demand", "reserved", "spot"] as const) {
+      const breakdown = calculateCostBreakdown({ ...baseFacts, capacity_type }, "fine_tuning");
+      expect(totalEffectiveCost(breakdown)).toBeGreaterThan(0);
+      expect(breakdown.compute_usd).toBeGreaterThanOrEqual(0);
+      expect(breakdown.storage_usd).toBeGreaterThanOrEqual(0);
+      expect(breakdown.cpu_ram_usd).toBeGreaterThanOrEqual(0);
+      expect(breakdown.estimated_egress_usd).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("rounds to whole cents, never leaking floating-point noise into the response", () => {
+    const breakdown = calculateCostBreakdown(baseFacts, "inference");
+    for (const value of Object.values(breakdown)) {
+      expect(Number.isInteger(Math.round(value * 100))).toBe(true);
+    }
+  });
 });

@@ -76,4 +76,32 @@ describe("CLAUDE.md §2 Fail-Closed Rule", () => {
     expect(states[0]?.status).toBe("failed");
     expect(states[0]?.facts).toHaveLength(0);
   });
+
+  it("total outage (all 3 providers broken) still returns 200 with an honest empty result, not a crash or fabricated data", async () => {
+    const brokenLambda: ProviderAdapter = { id: "lambda_labs", async fetch() { throw new Error("outage: lambda"); } };
+    const brokenRunpod: ProviderAdapter = { id: "runpod", async fetch() { throw new Error("outage: runpod"); } };
+    const brokenAll: ProviderAdapter = { id: "coreweave", async fetch() { throw new Error("outage: coreweave"); } };
+
+    const built = Fastify({ logger: false });
+    const cache = new IngestionCache([brokenLambda, brokenRunpod, brokenAll]);
+    await cache.ingestAll();
+    registerQuoteRoute(built, { cache, validApiKeys: new Set([API_KEY]), quoteTtlSeconds: 300 });
+    app = built;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/route/quote",
+      headers: { authorization: `Bearer ${API_KEY}` },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.quotes).toEqual([]);
+    expect(body.confidence).toBe(0);
+    expect(body.excluded_providers).toHaveLength(3);
+    expect(new Set(body.excluded_providers.map((e: any) => e.provider))).toEqual(
+      new Set(["lambda_labs", "runpod", "coreweave"]),
+    );
+  });
 });
