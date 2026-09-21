@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ProviderObservedFacts } from "../types/schema.js";
 import type { ProviderAdapter, ProviderFetchResult } from "./types.js";
+import { FixtureRawEntrySource, type RawEntrySource } from "./rawSource.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.join(__dirname, "fixtures", "runpod.fixture.json");
@@ -26,66 +26,76 @@ interface RunpodRawEntry {
   spotPrice: number | null;
 }
 
-export const runpodAdapter: ProviderAdapter = {
-  id: "runpod",
-  async fetch(): Promise<ProviderFetchResult> {
-    const fetchedAt = new Date().toISOString();
-    const raw = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8")) as unknown[];
+/** Normalization/validation logic — genuinely provider-specific domain
+ * knowledge, unchanged by where `raw` came from. See rawSource.ts for
+ * the live-polling/webhook-ready seam this now goes through. */
+export function createRunpodAdapter(source: RawEntrySource): ProviderAdapter {
+  return {
+    id: "runpod",
+    async fetch(): Promise<ProviderFetchResult> {
+      const fetchedAt = new Date().toISOString();
+      const raw = await source.fetchRawEntries();
 
-    const facts: ProviderObservedFacts[] = [];
-    const rejected: { raw: unknown; reason: string }[] = [];
+      const facts: ProviderObservedFacts[] = [];
+      const rejected: { raw: unknown; reason: string }[] = [];
 
-    for (const entry of raw) {
-      const e = entry as Partial<RunpodRawEntry>;
+      for (const entry of raw) {
+        const e = entry as Partial<RunpodRawEntry>;
 
-      // On-demand (SECURE) rate is per-GPU — multiply by count for the
-      // node-level rate our schema expects. Community-cloud entries with
-      // no on-demand rate fall back to spot pricing, capacity_type "spot".
-      let hourlyRate: number | null = null;
-      let capacityType: "on_demand" | "spot" | null = null;
-      if (typeof e.pricePerGpuHr === "number" && typeof e.gpuCount === "number") {
-        hourlyRate = e.pricePerGpuHr * e.gpuCount;
-        capacityType = "on_demand";
-      } else if (typeof e.spotPrice === "number" && typeof e.gpuCount === "number") {
-        hourlyRate = e.spotPrice * e.gpuCount;
-        capacityType = "spot";
+        // On-demand (SECURE) rate is per-GPU — multiply by count for the
+        // node-level rate our schema expects. Community-cloud entries with
+        // no on-demand rate fall back to spot pricing, capacity_type "spot".
+        let hourlyRate: number | null = null;
+        let capacityType: "on_demand" | "spot" | null = null;
+        if (typeof e.pricePerGpuHr === "number" && typeof e.gpuCount === "number") {
+          hourlyRate = e.pricePerGpuHr * e.gpuCount;
+          capacityType = "on_demand";
+        } else if (typeof e.spotPrice === "number" && typeof e.gpuCount === "number") {
+          hourlyRate = e.spotPrice * e.gpuCount;
+          capacityType = "spot";
+        }
+
+        if (hourlyRate === null || !capacityType) {
+          rejected.push({ raw: entry, reason: "no usable on-demand or spot rate present" });
+          continue;
+        }
+        if (!e.vcpuCount || !e.memoryInGb || e.containerDiskInGb === undefined) {
+          rejected.push({ raw: entry, reason: "missing required spec fields" });
+          continue;
+        }
+
+        const candidate: unknown = {
+          provider: "runpod",
+          instance_type: e.gpuTypeId,
+          region: e.dataCenter,
+          base_hourly_rate_usd: hourlyRate,
+          specs: {
+            gpu_model: e.gpuTypeId,
+            gpu_count: e.gpuCount,
+            gpu_memory_gb: 80,
+            interconnect: e.networkFabric,
+            vcpus: e.vcpuCount,
+            ram_gb: e.memoryInGb,
+            local_storage_gb: e.containerDiskInGb,
+          },
+          capacity_type: capacityType,
+          observed_at: fetchedAt,
+        };
+
+        const parsed = ProviderObservedFacts.safeParse(candidate);
+        if (parsed.success) {
+          facts.push(parsed.data);
+        } else {
+          rejected.push({ raw: entry, reason: `schema validation failed: ${parsed.error.message}` });
+        }
       }
 
-      if (hourlyRate === null || !capacityType) {
-        rejected.push({ raw: entry, reason: "no usable on-demand or spot rate present" });
-        continue;
-      }
-      if (!e.vcpuCount || !e.memoryInGb || e.containerDiskInGb === undefined) {
-        rejected.push({ raw: entry, reason: "missing required spec fields" });
-        continue;
-      }
+      return { provider: "runpod", facts, rejected, fetchedAt };
+    },
+  };
+}
 
-      const candidate: unknown = {
-        provider: "runpod",
-        instance_type: e.gpuTypeId,
-        region: e.dataCenter,
-        base_hourly_rate_usd: hourlyRate,
-        specs: {
-          gpu_model: e.gpuTypeId,
-          gpu_count: e.gpuCount,
-          gpu_memory_gb: 80,
-          interconnect: e.networkFabric,
-          vcpus: e.vcpuCount,
-          ram_gb: e.memoryInGb,
-          local_storage_gb: e.containerDiskInGb,
-        },
-        capacity_type: capacityType,
-        observed_at: fetchedAt,
-      };
-
-      const parsed = ProviderObservedFacts.safeParse(candidate);
-      if (parsed.success) {
-        facts.push(parsed.data);
-      } else {
-        rejected.push({ raw: entry, reason: `schema validation failed: ${parsed.error.message}` });
-      }
-    }
-
-    return { provider: "runpod", facts, rejected, fetchedAt };
-  },
-};
+// V1 wiring — CLAUDE.md's locked "3 mock provider feeds" scope. Swap to
+// a real HttpRawEntrySource here (once a real RunPod API key exists)
+// without touching anything above.
+export const runpodAdapter: ProviderAdapter = createRunpodAdapter(new FixtureRawEntrySource(FIXTURE_PATH));

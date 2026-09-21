@@ -1,6 +1,13 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
+import type { ProcessedEventStore } from "../../payments/processedEvents.js";
+import {
+  buildPaymentAuthorizationMessage,
+  recoverPayerAddress,
+  verifyOnChainUsdcTransfer,
+  type MinimalChainReader,
+} from "../../payments/baseVerification.js";
 import {
   ChallengeStore,
   computeRequestHash,
@@ -28,6 +35,9 @@ export interface AuthMiddlewareDeps {
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
   challengeStore: ChallengeStore;
+  processedEvents: ProcessedEventStore;
+  chainReader: MinimalChainReader;
+  treasuryAddress: string;
   routePriceUsdc?: number;
 }
 
@@ -35,24 +45,29 @@ export interface AuthMiddlewareDeps {
  * CLAUDE.md §4 Dual-Rail — Bearer API keys (real, hashed, prepaid-
  * credit-backed) OR x402/USDC (machine-native), either sufficient.
  *
- * Primary Path (Bearer): looks up the real key via ApiKeyStore (never
- * compares raw key strings — see that module's own header comment),
- * then atomically checks-and-deducts the route's price from that
- * account's CreditLedger balance. A recognized key with insufficient
- * balance gets a SPECIFIC "insufficient_credits" 402 (top up), not the
- * generic x402 challenge — those are different problems with different
- * fixes, and silently redirecting a legitimate prepaid customer into
- * "pay again via crypto" without saying why would be a bad surprise.
- * An unrecognized/revoked key, by contrast, genuinely has no rail
- * engaged yet, so it falls through to offering x402 as a real
- * alternative rather than dead-ending.
+ * Primary Path (Bearer): unchanged from the credit-ledger pass — see
+ * that commit for the full writeup.
  *
- * Secondary Path (x402): unchanged protocol from the prior pass — real
- * challenge/nonce/receipt cycle, see x402.ts for the full writeup.
- *
- * This middleware assumes validateQuoteRequest has ALREADY run (see
- * that module) — request.validatedQuoteRequest exists and nothing here
- * needs to guess at body shape before charging for it.
+ * Secondary Path (x402): now REAL settlement verification, not mocked.
+ * Three independent checks, all must pass:
+ *   1. Nonce is real, unused, unexpired (ChallengeStore, unchanged).
+ *   2. The submitted signature recovers to the claimed payerAddress
+ *      over a canonical message binding nonce+amount+txHash+network —
+ *      proves the claimed payer actually authorized THIS payment, not
+ *      just any payment (baseVerification.ts, real ECDSA recovery).
+ *   3. That exact txHash is a real, successful, on-chain USDC Transfer
+ *      on Base from payerAddress to OUR treasury address for at least
+ *      the required amount (a real RPC read) — AND that txHash hasn't
+ *      already been used to authorize a different request (real
+ *      transfers can be reused against multiple nonces otherwise,
+ *      since the nonce alone only protects the challenge, not the
+ *      underlying payment proof).
+ * Order matters: nonce is consumed FIRST (existing atomic pattern) —
+ * if the later, async checks fail, that nonce is burned and the client
+ * must request a fresh challenge. Acceptable V1 tradeoff: it keeps the
+ * single-use property enforced by one atomic DB transaction rather
+ * than needing a check-then-async-then-consume dance that would open
+ * its own race window.
  */
 export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
   const routePriceUsdc = deps.routePriceUsdc ?? DEFAULT_ROUTE_PRICE_USDC;
@@ -107,18 +122,64 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
 
     if (!("error" in submission)) {
       const consumed = deps.challengeStore.consume(submission.nonce, submission.amountUsdc, now);
-      if (consumed.ok) {
-        const receipt = signReceipt({
-          requestHash,
-          nonce: submission.nonce,
-          issuedAtMs: now,
-          expiresAtMs: now + RECEIPT_TTL_SECONDS * 1000,
-        });
-        reply.header("X-Payment-Receipt", receipt);
-        request.authContext = { rail: "x402", identifier: submission.nonce.slice(0, 8) };
+      if (!consumed.ok) {
+        sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, consumed.reason);
         return;
       }
-      sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, consumed.reason);
+
+      // Check 2: signature proves payerAddress authorized this exact
+      // nonce/amount/txHash.
+      const message = buildPaymentAuthorizationMessage({
+        nonce: submission.nonce,
+        amountUsdc: submission.amountUsdc,
+        txHash: submission.txHash,
+        network: "base",
+      });
+      const recovered = recoverPayerAddress(message, submission.signature);
+      if (!recovered.valid || recovered.address.toLowerCase() !== submission.payerAddress.toLowerCase()) {
+        sendPaymentRequired(
+          reply,
+          deps.challengeStore,
+          routePriceUsdc,
+          now,
+          !recovered.valid ? recovered.reason : "signature does not match claimed payerAddress",
+        );
+        return;
+      }
+
+      // Check 2.5: this exact on-chain payment hasn't already been
+      // used to authorize a DIFFERENT request — the nonce alone
+      // doesn't prevent reusing one real transfer against many nonces.
+      const txAlreadyUsed = deps.processedEvents.isProcessed(submission.txHash);
+      if (txAlreadyUsed) {
+        sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, "this transaction has already been used to authorize a different payment");
+        return;
+      }
+
+      // Check 3: the transfer actually happened on-chain, to us, for
+      // enough USDC.
+      const onChain = await verifyOnChainUsdcTransfer(
+        deps.chainReader,
+        submission.txHash,
+        submission.payerAddress,
+        deps.treasuryAddress,
+        submission.amountUsdc,
+      );
+      if (!onChain.valid) {
+        sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, onChain.reason);
+        return;
+      }
+
+      deps.processedEvents.recordIfNew(submission.txHash, "base_onchain", submission.payerAddress, submission.amountUsdc);
+
+      const receipt = signReceipt({
+        requestHash,
+        nonce: submission.nonce,
+        issuedAtMs: now,
+        expiresAtMs: now + RECEIPT_TTL_SECONDS * 1000,
+      });
+      reply.header("X-Payment-Receipt", receipt);
+      request.authContext = { rail: "x402", identifier: submission.nonce.slice(0, 8) };
       return;
     }
 

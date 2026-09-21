@@ -7,6 +7,8 @@ import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
 import { ChallengeStore } from "../../src/api/middleware/x402.js";
 
+const TEST_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9";
+
 /**
  * The actual point of this whole persistence pass: data must survive
  * the process that wrote it going away. Every other test in this repo
@@ -85,11 +87,11 @@ describe("SQLite persistence — survives closing and reopening the connection",
     const now = Date.now();
 
     const firstConnection = createDatabase(dbPath);
-    const { nonce } = new ChallengeStore(firstConnection).issue(0.15, now);
+    const { nonce } = new ChallengeStore(firstConnection, TEST_TREASURY_ADDRESS).issue(0.15, now);
     firstConnection.close(); // client is mid-flow when the process restarts
 
     const secondConnection = createDatabase(dbPath);
-    const secondStore = new ChallengeStore(secondConnection);
+    const secondStore = new ChallengeStore(secondConnection, TEST_TREASURY_ADDRESS);
     const firstConsume = secondStore.consume(nonce, 0.15, now + 1000);
     const secondConsume = secondStore.consume(nonce, 0.15, now + 2000); // replay attempt
     secondConnection.close();

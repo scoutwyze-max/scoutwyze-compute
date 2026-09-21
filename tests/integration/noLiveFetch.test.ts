@@ -6,8 +6,12 @@ import { createDatabase } from "../../src/db/connection.js";
 import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
 import { ChallengeStore } from "../../src/api/middleware/x402.js";
+import { ProcessedEventStore } from "../../src/payments/processedEvents.js";
+import { FakeChainReader } from "../helpers/fakeChainReader.js";
 import type { ProviderAdapter } from "../../src/providers/types.js";
 import type { ProviderObservedFacts } from "../../src/types/schema.js";
+
+const TEST_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9";
 
 let app: FastifyInstance | undefined;
 
@@ -37,7 +41,9 @@ const mockFacts: ProviderObservedFacts = {
 const db = createDatabase(":memory:");
 const apiKeyStore = new ApiKeyStore(db);
 const creditLedger = new CreditLedger(db);
-const challengeStore = new ChallengeStore(db);
+const challengeStore = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
+const processedEvents = new ProcessedEventStore(db);
+const chainReader = new FakeChainReader();
 const { rawKey: API_KEY } = apiKeyStore.create("no-live-fetch-test-account");
 creditLedger.topUp("no-live-fetch-test-account", 1000);
 
@@ -63,7 +69,16 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     app = Fastify({ logger: false });
-    registerQuoteRoute(app, { cache, apiKeyStore, creditLedger, challengeStore, quoteTtlSeconds: 300 });
+    registerQuoteRoute(app, {
+      cache,
+      apiKeyStore,
+      creditLedger,
+      challengeStore,
+      processedEvents,
+      chainReader,
+      treasuryAddress: TEST_TREASURY_ADDRESS,
+      quoteTtlSeconds: 300,
+    });
 
     // 5 real HTTP requests through the actual route handler.
     for (let i = 0; i < 5; i++) {
@@ -94,7 +109,16 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     app = Fastify({ logger: false });
-    registerQuoteRoute(app, { cache, apiKeyStore, creditLedger, challengeStore, quoteTtlSeconds: 300 });
+    registerQuoteRoute(app, {
+      cache,
+      apiKeyStore,
+      creditLedger,
+      challengeStore,
+      processedEvents,
+      chainReader,
+      treasuryAddress: TEST_TREASURY_ADDRESS,
+      quoteTtlSeconds: 300,
+    });
     await app.inject({ method: "POST", url: "/v1/route/quote", headers: { authorization: `Bearer ${API_KEY}` }, payload: {} });
     expect(fetchSpy).toHaveBeenCalledTimes(1); // request added nothing
 

@@ -1,17 +1,15 @@
-import { randomUUID, createHmac, createHash } from "node:crypto";
+import { randomUUID, createHmac, createHash, timingSafeEqual } from "node:crypto";
 import type Database from "better-sqlite3";
 
 /**
  * CLAUDE.md §4 Secondary Path — x402 protocol / USDC on Base.
  *
- * V1 SCOPE (per direction, still true): the actual on-chain settlement
- * verification (confirming a real USDC transfer happened on Base) is
- * NOT built — that's the one piece still mocked. Everything else here
- * — challenge issuance, nonce single-use enforcement, TTL expiry,
- * signed receipts bound to a specific request — is real application-
- * layer protocol logic, not mocked, because replay/scraping protection
- * doesn't depend on which settlement backend eventually verifies the
- * money moved.
+ * Challenge issuance, nonce single-use enforcement, TTL expiry, and
+ * signed receipts bound to a specific request all live here. The real
+ * signature-recovery and on-chain settlement verification (2026-09,
+ * scope-expanded past the original V1 mock boundary at Robert's
+ * explicit direction) live in payments/baseVerification.ts and are
+ * wired in from auth.ts — this file no longer has a mocked piece.
  */
 
 export const MIN_ROUTE_PRICE_USDC = 0.1;
@@ -67,7 +65,14 @@ class ChallengeRejected extends Error {
  * between.
  */
 export class ChallengeStore {
-  constructor(private readonly db: Database.Database) {}
+  // treasuryAddress is real, not a secret — it's the address clients
+  // are TOLD to pay, publicly advertised in every 402 response, same
+  // as any receiving address. Injected (not hardcoded here) so tests
+  // can use a distinct known address without touching env vars.
+  constructor(
+    private readonly db: Database.Database,
+    private readonly treasuryAddress: string,
+  ) {}
 
   issue(amountUsdc: number, now: number): X402Challenge {
     const nonce = randomUUID();
@@ -80,7 +85,7 @@ export class ChallengeStore {
       network: "base",
       maxAmountRequired: amountUsdc.toFixed(2),
       resource: "/v1/route/quote",
-      payTo: "0xScoutWyzeComputeMockReceivingAddress",
+      payTo: this.treasuryAddress,
       asset: "USDC",
       nonce,
       expiresAt: new Date(expiresAtMs).toISOString(),
@@ -132,8 +137,8 @@ export interface ReceiptPayload {
   expiresAtMs: number;
 }
 
-/** Real HMAC-SHA256 signing — the settlement check behind it is mocked,
- * the signature on the receipt itself is not. */
+/** Real HMAC-SHA256 signing of a real, on-chain-verified payment's
+ * receipt (see auth.ts's x402 branch for the settlement check itself). */
 export function signReceipt(payload: ReceiptPayload): string {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = createHmac("sha256", RECEIPT_SIGNING_SECRET).update(body).digest("hex");
@@ -149,7 +154,14 @@ export function verifyReceiptToken(
   const [body, signature] = parts as [string, string];
 
   const expectedSignature = createHmac("sha256", RECEIPT_SIGNING_SECRET).update(body).digest("hex");
-  if (signature !== expectedSignature) return { valid: false, reason: "invalid receipt signature" };
+  // Constant-time comparison — real security fix found while building
+  // the Stripe verifier alongside this: a naive !== leaks timing
+  // information about how many leading bytes matched.
+  const expectedBuf = Buffer.from(expectedSignature, "hex");
+  const providedBuf = Buffer.from(signature, "hex");
+  if (providedBuf.length !== expectedBuf.length || !timingSafeEqual(providedBuf, expectedBuf)) {
+    return { valid: false, reason: "invalid receipt signature" };
+  }
 
   let payload: ReceiptPayload;
   try {
@@ -167,7 +179,16 @@ export interface X402PaymentSubmission {
   network: "base";
   nonce: string;
   amountUsdc: number;
-  payload: string; // mock settlement proof — real integration replaces this with an actual signed tx reference
+  // Real settlement proof (no longer a mock opaque string): the payer
+  // claims to have sent a real USDC transfer from payerAddress in
+  // transaction txHash, and signature is an EIP-191 signature over the
+  // canonical message (buildPaymentAuthorizationMessage in
+  // baseVerification.ts) proving payerAddress authorized THIS exact
+  // nonce/amount/txHash. Neither claim is trusted until both are
+  // independently verified — see auth.ts's x402 branch.
+  payerAddress: string;
+  txHash: string;
+  signature: string;
 }
 
 export function decodePaymentHeader(headerValue: string | undefined): X402PaymentSubmission | { error: string } {
@@ -182,6 +203,16 @@ export function decodePaymentHeader(headerValue: string | undefined): X402Paymen
   if (p.scheme !== "exact" || p.network !== "base") return { error: "unsupported payment scheme/network" };
   if (typeof p.nonce !== "string" || !p.nonce) return { error: "missing nonce — payment must reference a real issued challenge" };
   if (typeof p.amountUsdc !== "number") return { error: "missing or invalid amountUsdc" };
-  if (typeof p.payload !== "string" || !p.payload) return { error: "missing settlement payload" };
-  return { scheme: "exact", network: "base", nonce: p.nonce, amountUsdc: p.amountUsdc, payload: p.payload };
+  if (typeof p.payerAddress !== "string" || !p.payerAddress) return { error: "missing payerAddress" };
+  if (typeof p.txHash !== "string" || !p.txHash) return { error: "missing txHash" };
+  if (typeof p.signature !== "string" || !p.signature) return { error: "missing signature" };
+  return {
+    scheme: "exact",
+    network: "base",
+    nonce: p.nonce,
+    amountUsdc: p.amountUsdc,
+    payerAddress: p.payerAddress,
+    txHash: p.txHash,
+    signature: p.signature,
+  };
 }

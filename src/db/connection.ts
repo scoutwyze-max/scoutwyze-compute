@@ -63,6 +63,20 @@ export function createDatabase(filePath: string): Database.Database {
       expires_at_ms INTEGER NOT NULL,
       used INTEGER NOT NULL DEFAULT 0
     );
+
+    -- Idempotency for real payment intake (Stripe webhook retries are
+    -- at-least-once by design; a Base tx hash must also never be
+    -- credited twice if replayed). Shared table, not per-source,
+    -- because the property being enforced -- "this real-world payment
+    -- event has already been turned into a topUp exactly once" -- is
+    -- the same regardless of which rail it came from.
+    CREATE TABLE IF NOT EXISTS processed_payment_events (
+      event_id TEXT PRIMARY KEY,
+      source TEXT NOT NULL CHECK (source IN ('stripe','base_onchain')),
+      account_id TEXT NOT NULL,
+      amount_usd_cents INTEGER NOT NULL,
+      processed_at TEXT NOT NULL
+    );
   `);
 
   return db;

@@ -3,6 +3,8 @@ import { buildRouteQuoteResponse } from "../../engine/router.js";
 import type { IngestionCache } from "../../ingestion/cache.js";
 import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
+import type { ProcessedEventStore } from "../../payments/processedEvents.js";
+import type { MinimalChainReader } from "../../payments/baseVerification.js";
 import type { ChallengeStore } from "../middleware/x402.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
 import { validateQuoteRequest } from "../middleware/validateQuoteRequest.js";
@@ -12,6 +14,9 @@ export interface QuoteRouteDeps {
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
   challengeStore: ChallengeStore;
+  processedEvents: ProcessedEventStore;
+  chainReader: MinimalChainReader;
+  treasuryAddress: string;
   quoteTtlSeconds: number;
   routePriceUsdc?: number;
 }
@@ -21,6 +26,9 @@ export function registerQuoteRoute(app: FastifyInstance, deps: QuoteRouteDeps): 
     apiKeyStore: deps.apiKeyStore,
     creditLedger: deps.creditLedger,
     challengeStore: deps.challengeStore,
+    processedEvents: deps.processedEvents,
+    chainReader: deps.chainReader,
+    treasuryAddress: deps.treasuryAddress,
     routePriceUsdc: deps.routePriceUsdc,
   });
 
