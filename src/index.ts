@@ -3,6 +3,9 @@ import Fastify from "fastify";
 import { createIngestionCache } from "./ingestion/ingest.js";
 import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
+import { registerAdminRoutes } from "./api/routes/admin.js";
+import { ApiKeyStore } from "./billing/apiKeyStore.js";
+import { CreditLedger } from "./billing/creditLedger.js";
 import { logger } from "./utils/logger.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -18,21 +21,30 @@ const QUOTE_TTL_SECONDS = Number(process.env.QUOTE_TTL_SECONDS ?? 300);
 // going stale, while still bounding worst-case staleness if the worker
 // dies silently.
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS ?? INGESTION_REFRESH_INTERVAL_SECONDS * 3);
-const VALID_API_KEYS = new Set(
-  (process.env.SCOUTWYZE_API_KEYS ?? "").split(",").map((k) => k.trim()).filter(Boolean),
-);
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+// Shared price for both auth rails — undefined lets createAuthMiddleware
+// fall back to x402.ts's own DEFAULT_ROUTE_PRICE_USDC, keeping one
+// source of truth for the default instead of duplicating it here.
+const ROUTE_PRICE_USDC = process.env.ROUTE_PRICE_USDC ? Number(process.env.ROUTE_PRICE_USDC) : undefined;
 
 async function main() {
   const app = Fastify({ logger: false });
   const cache = createIngestionCache(CACHE_TTL_SECONDS);
   const worker = new IngestionWorker(cache, INGESTION_REFRESH_INTERVAL_SECONDS);
+  const apiKeyStore = new ApiKeyStore();
+  const creditLedger = new CreditLedger();
 
   // CLAUDE.md §4 — populate the cache once at boot BEFORE serving any
   // traffic, then keep it warm on an interval. The route handler never
   // triggers ingestion itself.
   await worker.start();
 
-  registerQuoteRoute(app, { cache, validApiKeys: VALID_API_KEYS, quoteTtlSeconds: QUOTE_TTL_SECONDS });
+  registerQuoteRoute(app, { cache, apiKeyStore, creditLedger, quoteTtlSeconds: QUOTE_TTL_SECONDS, routePriceUsdc: ROUTE_PRICE_USDC });
+
+  if (!ADMIN_SECRET) {
+    logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");
+  }
+  registerAdminRoutes(app, { apiKeyStore, creditLedger, adminSecret: ADMIN_SECRET || "dev-only-insecure-admin-secret" });
 
   app.get("/healthz", async () => ({
     status: "ok",

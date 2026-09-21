@@ -69,6 +69,25 @@ describe("dual-rail auth — Primary Path (Bearer)", () => {
     expect(res.statusCode).toBe(402);
     expect(res.json().accepts[0].nonce).toBeTruthy();
   });
+
+  it("VALIDATE-BEFORE-BILL — a malformed request with NO auth returns 400, not a 402 challenge", async () => {
+    // Real bug found while building the credit ledger: schema
+    // validation used to run inside the route handler, AFTER the
+    // auth/x402 preHandler — meaning a garbage request could still
+    // provoke (and on the credit rail, pay for) the auth machinery
+    // before ever being rejected. validateQuoteRequest.ts now runs
+    // first; this confirms a malformed body never even reaches the
+    // point where a challenge nonce would be issued.
+    const built = await buildTestApp();
+    app = built.app;
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/route/quote",
+      payload: { workload_type: "not_a_real_workload" }, // no auth AND invalid body
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_request");
+  });
 });
 
 describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
