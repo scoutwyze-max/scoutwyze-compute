@@ -100,6 +100,41 @@ describe("Primary Path — API key + prepaid credit ledger, end to end", () => {
     expect(third.json().balanceUsd).toBe(0);
   });
 
+  it("ATOMICITY UNDER REAL CONCURRENCY — 10 genuinely simultaneous requests against a balance that covers exactly 4 of them never double-spend", async () => {
+    const built = await buildTestApp();
+    app = built.app;
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/admin/api-keys",
+      headers: { "x-admin-secret": built.adminSecret },
+      payload: { accountId: "concurrency-account" },
+    });
+    const { apiKey } = created.json();
+    await app.inject({
+      method: "POST",
+      url: "/v1/admin/accounts/concurrency-account/credits",
+      headers: { "x-admin-secret": built.adminSecret },
+      payload: { amountUsd: 0.6 }, // exactly 4 requests at the $0.15 default price
+    });
+
+    // Fired together, not awaited one at a time — this is what actually
+    // exercises CreditLedger.charge()'s transaction, unlike the
+    // sequential draining test above.
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        app!.inject({ method: "POST", url: "/v1/route/quote", headers: { authorization: `Bearer ${apiKey}` }, payload: {} }),
+      ),
+    );
+
+    const succeeded = responses.filter((r) => r.statusCode === 200);
+    const rejected = responses.filter((r) => r.statusCode === 402);
+    expect(succeeded).toHaveLength(4); // exactly what the balance covers, never more
+    expect(rejected).toHaveLength(6);
+    expect(built.creditLedger.getBalance("concurrency-account")).toBe(0); // never negative, never left over
+    expect(built.creditLedger.getLedger("concurrency-account").filter((e) => e.type === "charge")).toHaveLength(4);
+  });
+
   it("VALIDATE-BEFORE-BILL — a malformed request with a funded key is rejected for free, balance is untouched", async () => {
     const built = await buildTestApp();
     app = built.app;

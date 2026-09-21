@@ -1,17 +1,16 @@
 import { randomBytes, createHash, randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 
 /**
  * Real API-key hygiene, not a flat env-var allowlist (what
  * SCOUTWYZE_API_KEYS was): keys are generated with a real random
  * secret, and only the SHA-256 HASH is ever stored or compared — the
  * raw key is returned exactly once, at creation time, the same
- * convention Stripe/GitHub/etc. use. A leaked store dump (logs, a DB
- * backup) never exposes a usable key.
+ * convention Stripe/GitHub/etc. use. A leaked DB dump never exposes a
+ * usable key.
  *
- * V1 scope, real gap, not silently assumed away: in-memory only. A
- * process restart wipes every issued key. A real deployment needs a
- * persistent, shared store (Postgres, etc.) — same posture the
- * ingestion cache and x402 challenge store already take on this.
+ * Backed by SQLite (src/db/connection.ts) — durable across restarts,
+ * unlike the earlier in-memory Map version.
  */
 export interface ApiKeyRecord {
   keyId: string;
@@ -27,8 +26,26 @@ export function hashApiKey(rawKey: string): string {
   return createHash("sha256").update(rawKey).digest("hex");
 }
 
+interface ApiKeyRow {
+  key_id: string;
+  account_id: string;
+  key_hash: string;
+  created_at: string;
+  revoked: number;
+}
+
+function rowToRecord(row: ApiKeyRow): ApiKeyRecord {
+  return {
+    keyId: row.key_id,
+    accountId: row.account_id,
+    keyHash: row.key_hash,
+    createdAt: row.created_at,
+    revoked: row.revoked === 1,
+  };
+}
+
 export class ApiKeyStore {
-  private byHash = new Map<string, ApiKeyRecord>();
+  constructor(private readonly db: Database.Database) {}
 
   /** Returns the raw key ONCE — callers must show/return it to the
    * caller immediately and never persist it themselves. */
@@ -42,7 +59,19 @@ export class ApiKeyStore {
       createdAt: new Date().toISOString(),
       revoked: false,
     };
-    this.byHash.set(record.keyHash, record);
+
+    // Ensure the account row exists (balance 0) so a key can be issued
+    // before any top-up — FK-free by design (accounts is referenced
+    // logically, not via a foreign key, since ledger entries can
+    // outlive an account's keys and vice versa).
+    this.db
+      .prepare(`INSERT OR IGNORE INTO accounts (account_id, balance_usd_cents, created_at) VALUES (?, 0, ?)`)
+      .run(accountId, record.createdAt);
+
+    this.db
+      .prepare(`INSERT INTO api_keys (key_id, account_id, key_hash, created_at, revoked) VALUES (?, ?, ?, ?, 0)`)
+      .run(record.keyId, record.accountId, record.keyHash, record.createdAt);
+
     return { rawKey, record };
   }
 
@@ -50,18 +79,15 @@ export class ApiKeyStore {
    * never compares raw strings directly. Returns null for an unknown
    * OR revoked key; callers don't need to separately check `.revoked`. */
   lookupByRawKey(rawKey: string): ApiKeyRecord | null {
-    const record = this.byHash.get(hashApiKey(rawKey));
-    if (!record || record.revoked) return null;
-    return record;
+    const row = this.db
+      .prepare<[string], ApiKeyRow>(`SELECT * FROM api_keys WHERE key_hash = ?`)
+      .get(hashApiKey(rawKey));
+    if (!row || row.revoked === 1) return null;
+    return rowToRecord(row);
   }
 
   revoke(keyId: string): boolean {
-    for (const record of this.byHash.values()) {
-      if (record.keyId === keyId) {
-        record.revoked = true;
-        return true;
-      }
-    }
-    return false;
+    const result = this.db.prepare(`UPDATE api_keys SET revoked = 1 WHERE key_id = ?`).run(keyId);
+    return result.changes > 0;
   }
 }

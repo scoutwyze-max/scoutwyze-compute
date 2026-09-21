@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
+import type Database from "better-sqlite3";
+import { createDatabase } from "../../src/db/connection.js";
 import {
   CHALLENGE_TTL_SECONDS,
   ChallengeStore,
@@ -9,8 +11,13 @@ import {
 } from "../../src/api/middleware/x402.js";
 
 describe("ChallengeStore — single-use nonce enforcement", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = createDatabase(":memory:");
+  });
+
   it("issues a well-formed challenge with a real nonce", () => {
-    const store = new ChallengeStore();
+    const store = new ChallengeStore(db);
     const challenge = store.issue(0.15, Date.now());
     expect(challenge.nonce).toBeTruthy();
     expect(challenge.scheme).toBe("exact");
@@ -19,7 +26,7 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
   });
 
   it("consumes a fresh, valid nonce exactly once", () => {
-    const store = new ChallengeStore();
+    const store = new ChallengeStore(db);
     const now = Date.now();
     const { nonce } = store.issue(0.15, now);
 
@@ -31,13 +38,13 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
   });
 
   it("rejects a nonce that was never issued", () => {
-    const store = new ChallengeStore();
+    const store = new ChallengeStore(db);
     const result = store.consume("never-issued", 0.15, Date.now());
     expect(result).toEqual({ ok: false, reason: "unknown or already-expired challenge nonce" });
   });
 
   it("rejects an amount below what the challenge required", () => {
-    const store = new ChallengeStore();
+    const store = new ChallengeStore(db);
     const now = Date.now();
     const { nonce } = store.issue(0.2, now);
     const result = store.consume(nonce, 0.1, now);
@@ -46,7 +53,7 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
   });
 
   it("CLAUDE.md §3 'times out' — a nonce submitted after CHALLENGE_TTL_SECONDS is rejected, not silently honored", () => {
-    const store = new ChallengeStore();
+    const store = new ChallengeStore(db);
     const issuedAt = Date.now();
     const { nonce } = store.issue(0.15, issuedAt);
 
@@ -56,7 +63,7 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
     // Confirm it's genuinely still valid right up to the boundary —
     // otherwise the "timed out" assertion below wouldn't prove the TTL
     // is what triggered the rejection.
-    const freshStore = new ChallengeStore();
+    const freshStore = new ChallengeStore(db);
     const fresh = freshStore.issue(0.15, issuedAt);
     expect(freshStore.consume(fresh.nonce, 0.15, justBeforeTimeout)).toEqual({ ok: true });
 

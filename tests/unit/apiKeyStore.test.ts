@@ -1,9 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
+import type Database from "better-sqlite3";
+import { createDatabase } from "../../src/db/connection.js";
 import { ApiKeyStore, hashApiKey } from "../../src/billing/apiKeyStore.js";
 
 describe("ApiKeyStore", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = createDatabase(":memory:");
+  });
+
   it("create() returns a usable raw key and a record whose stored hash matches it", () => {
-    const store = new ApiKeyStore();
+    const store = new ApiKeyStore(db);
     const { rawKey, record } = store.create("acct-1");
     expect(rawKey.startsWith("sw_live_")).toBe(true);
     expect(record.keyHash).toBe(hashApiKey(rawKey));
@@ -12,25 +19,25 @@ describe("ApiKeyStore", () => {
   });
 
   it("never stores or exposes the raw key on the record itself — only the hash", () => {
-    const store = new ApiKeyStore();
+    const store = new ApiKeyStore(db);
     const { rawKey, record } = store.create("acct-1");
     expect(JSON.stringify(record)).not.toContain(rawKey);
   });
 
   it("lookupByRawKey finds a key that was actually issued", () => {
-    const store = new ApiKeyStore();
+    const store = new ApiKeyStore(db);
     const { rawKey, record } = store.create("acct-1");
     const found = store.lookupByRawKey(rawKey);
     expect(found?.keyId).toBe(record.keyId);
   });
 
   it("lookupByRawKey returns null for a key that was never issued", () => {
-    const store = new ApiKeyStore();
+    const store = new ApiKeyStore(db);
     expect(store.lookupByRawKey("sw_live_totallyMadeUp")).toBeNull();
   });
 
   it("lookupByRawKey returns null after the key is revoked — revocation is real, not cosmetic", () => {
-    const store = new ApiKeyStore();
+    const store = new ApiKeyStore(db);
     const { rawKey, record } = store.create("acct-1");
     expect(store.lookupByRawKey(rawKey)).not.toBeNull();
 
@@ -40,12 +47,12 @@ describe("ApiKeyStore", () => {
   });
 
   it("revoke() on an unknown keyId returns false rather than throwing", () => {
-    const store = new ApiKeyStore();
+    const store = new ApiKeyStore(db);
     expect(store.revoke("not-a-real-key-id")).toBe(false);
   });
 
   it("two separately created keys are never equal (real randomness, not a fixed/predictable value)", () => {
-    const store = new ApiKeyStore();
+    const store = new ApiKeyStore(db);
     const a = store.create("acct-1");
     const b = store.create("acct-1");
     expect(a.rawKey).not.toBe(b.rawKey);

@@ -3,6 +3,7 @@ import { buildRouteQuoteResponse } from "../../engine/router.js";
 import type { IngestionCache } from "../../ingestion/cache.js";
 import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
+import type { ChallengeStore } from "../middleware/x402.js";
 import { createAuthMiddleware } from "../middleware/auth.js";
 import { validateQuoteRequest } from "../middleware/validateQuoteRequest.js";
 
@@ -10,6 +11,7 @@ export interface QuoteRouteDeps {
   cache: IngestionCache;
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
+  challengeStore: ChallengeStore;
   quoteTtlSeconds: number;
   routePriceUsdc?: number;
 }
@@ -18,6 +20,7 @@ export function registerQuoteRoute(app: FastifyInstance, deps: QuoteRouteDeps): 
   const authMiddleware = createAuthMiddleware({
     apiKeyStore: deps.apiKeyStore,
     creditLedger: deps.creditLedger,
+    challengeStore: deps.challengeStore,
     routePriceUsdc: deps.routePriceUsdc,
   });
 

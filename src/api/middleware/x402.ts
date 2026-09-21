@@ -1,4 +1,5 @@
 import { randomUUID, createHmac, createHash } from "node:crypto";
+import type Database from "better-sqlite3";
 
 /**
  * CLAUDE.md §4 Secondary Path — x402 protocol / USDC on Base.
@@ -39,27 +40,41 @@ export interface X402Challenge {
   expiresAt: string;
 }
 
-interface StoredChallenge {
-  amountUsdc: number;
-  expiresAtMs: number;
-  used: boolean;
+interface ChallengeRow {
+  nonce: string;
+  amount_usdc_cents: number;
+  expires_at_ms: number;
+  used: number;
+}
+
+// Thrown inside consume()'s transaction to force a rollback on any
+// rejection path — never escapes consume() itself.
+class ChallengeRejected extends Error {
+  constructor(public readonly reason: string) {
+    super(reason);
+  }
 }
 
 /**
- * In-memory nonce store — single-use enforcement is the actual replay
- * defense (CLAUDE.md: "prevent replay attacks and scraping"). V1
- * scope note: in-memory means this resets on restart and doesn't share
- * state across multiple server instances — a real production
- * deployment would back this with a shared store (Redis, etc); noted
- * as a real gap, not silently assumed away.
+ * SQLite-backed nonce store — single-use enforcement is the actual
+ * replay defense (CLAUDE.md: "prevent replay attacks and scraping").
+ * Durable across restarts (previously an in-memory Map, wiped on every
+ * restart — a client mid-payment-flow across a deploy would have
+ * silently lost their challenge). consume()'s check-and-mark runs
+ * inside a real db.transaction(), same reasoning as
+ * CreditLedger.charge(): genuinely atomic against concurrent access at
+ * the database level, not just safe because JS has no await in
+ * between.
  */
 export class ChallengeStore {
-  private challenges = new Map<string, StoredChallenge>();
+  constructor(private readonly db: Database.Database) {}
 
   issue(amountUsdc: number, now: number): X402Challenge {
     const nonce = randomUUID();
     const expiresAtMs = now + CHALLENGE_TTL_SECONDS * 1000;
-    this.challenges.set(nonce, { amountUsdc, expiresAtMs, used: false });
+    this.db
+      .prepare(`INSERT INTO x402_challenges (nonce, amount_usdc_cents, expires_at_ms, used) VALUES (?, ?, ?, 0)`)
+      .run(nonce, Math.round(amountUsdc * 100), expiresAtMs);
     return {
       scheme: "exact",
       network: "base",
@@ -72,29 +87,27 @@ export class ChallengeStore {
     };
   }
 
-  /**
-   * Validates and, on success, atomically marks the nonce used — the
-   * check-and-mark happens in one call specifically so two concurrent
-   * requests racing the same nonce can't both pass (only the first
-   * caller to reach here gets `ok: true`).
-   */
   consume(nonce: string, submittedAmountUsdc: number, now: number): { ok: true } | { ok: false; reason: string } {
-    const challenge = this.challenges.get(nonce);
-    if (!challenge) return { ok: false, reason: "unknown or already-expired challenge nonce" };
-    if (challenge.used) return { ok: false, reason: "nonce already used — replay attempt rejected" };
-    if (now > challenge.expiresAtMs) {
-      this.challenges.delete(nonce);
-      return { ok: false, reason: "challenge timed out — submit payment within " + CHALLENGE_TTL_SECONDS + "s of receiving it" };
+    const run = this.db.transaction(() => {
+      const row = this.db.prepare<[string], ChallengeRow>(`SELECT * FROM x402_challenges WHERE nonce = ?`).get(nonce);
+      if (!row) throw new ChallengeRejected("unknown or already-expired challenge nonce");
+      if (row.used === 1) throw new ChallengeRejected("nonce already used — replay attempt rejected");
+      if (now > row.expires_at_ms) throw new ChallengeRejected(`challenge timed out — submit payment within ${CHALLENGE_TTL_SECONDS}s of receiving it`);
+      if (Math.round(submittedAmountUsdc * 100) < row.amount_usdc_cents) {
+        throw new ChallengeRejected(`amount $${submittedAmountUsdc} below the required $${(row.amount_usdc_cents / 100).toFixed(2)}`);
+      }
+      this.db.prepare(`UPDATE x402_challenges SET used = 1 WHERE nonce = ?`).run(nonce);
+    });
+
+    try {
+      run();
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof ChallengeRejected) return { ok: false, reason: err.reason };
+      throw err;
     }
-    if (submittedAmountUsdc < challenge.amountUsdc) {
-      return { ok: false, reason: `amount $${submittedAmountUsdc} below the required $${challenge.amountUsdc}` };
-    }
-    challenge.used = true;
-    return { ok: true };
   }
 }
-
-export const challengeStore = new ChallengeStore();
 
 /** Canonical, key-order-independent hash of a request body — this is
  * the "bound to the request hash" anti-scraping mechanism: a receipt

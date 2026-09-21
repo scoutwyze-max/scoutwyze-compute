@@ -1,14 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
+import type Database from "better-sqlite3";
+import { createDatabase } from "../../src/db/connection.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
 
 describe("CreditLedger", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = createDatabase(":memory:");
+  });
+
   it("a fresh, never-topped-up account has a balance of 0, not undefined/NaN", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     expect(ledger.getBalance("new-account")).toBe(0);
   });
 
   it("topUp increases balance and records a 'topup' ledger entry", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     const entry = ledger.topUp("acct-1", 10);
     expect(ledger.getBalance("acct-1")).toBe(10);
     expect(entry.type).toBe("topup");
@@ -18,13 +25,13 @@ describe("CreditLedger", () => {
   });
 
   it("topUp rejects a non-positive amount rather than silently no-opping or going negative", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     expect(() => ledger.topUp("acct-1", 0)).toThrow();
     expect(() => ledger.topUp("acct-1", -5)).toThrow();
   });
 
   it("charge succeeds against sufficient balance, deducts exactly, and records a 'charge' entry with the request hash", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     ledger.topUp("acct-1", 1);
     const result = ledger.charge("acct-1", 0.15, "hash-abc");
     expect(result.ok).toBe(true);
@@ -37,7 +44,7 @@ describe("CreditLedger", () => {
   });
 
   it("charge fails closed against insufficient balance — balance is unchanged, no ledger entry is written", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     ledger.topUp("acct-1", 0.1);
     const result = ledger.charge("acct-1", 0.15, "hash-abc");
     expect(result.ok).toBe(false);
@@ -50,13 +57,13 @@ describe("CreditLedger", () => {
   });
 
   it("an account with exactly zero balance is rejected, not treated as having infinite/undefined credit", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     const result = ledger.charge("never-funded", 0.01, "hash-abc");
     expect(result.ok).toBe(false);
   });
 
   it("sequential charges correctly deplete a balance to exactly zero, then the next one fails", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     ledger.topUp("acct-1", 0.3);
     expect(ledger.charge("acct-1", 0.15, "h1").ok).toBe(true);
     expect(ledger.charge("acct-1", 0.15, "h2").ok).toBe(true);
@@ -65,7 +72,7 @@ describe("CreditLedger", () => {
   });
 
   it("getLedger only returns entries for the requested account — no cross-account leakage", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     ledger.topUp("acct-1", 5);
     ledger.topUp("acct-2", 5);
     ledger.charge("acct-1", 1, "h1");
@@ -78,7 +85,7 @@ describe("CreditLedger", () => {
   });
 
   it("amounts round to whole cents, no floating-point drift leaking into balances", () => {
-    const ledger = new CreditLedger();
+    const ledger = new CreditLedger(db);
     ledger.topUp("acct-1", 0.1);
     ledger.topUp("acct-1", 0.2); // classic 0.1 + 0.2 !== 0.3 floating point trap
     expect(ledger.getBalance("acct-1")).toBe(0.3);

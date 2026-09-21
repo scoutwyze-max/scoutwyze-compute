@@ -4,8 +4,10 @@ import { IngestionCache } from "../../src/ingestion/cache.js";
 import { lambdaLabsAdapter } from "../../src/providers/lambdaLabs.js";
 import { runpodAdapter } from "../../src/providers/runpod.js";
 import { registerQuoteRoute } from "../../src/api/routes/quote.js";
+import { createDatabase } from "../../src/db/connection.js";
 import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
+import { ChallengeStore } from "../../src/api/middleware/x402.js";
 import type { ProviderAdapter } from "../../src/providers/types.js";
 
 let app: FastifyInstance | undefined;
@@ -25,8 +27,10 @@ const brokenCoreweaveAdapter: ProviderAdapter = {
 // Shared across this file's tests — not exercising billing itself, just
 // needs a real, funded key to get past auth so the fail-closed provider
 // behavior underneath it can be tested.
-const apiKeyStore = new ApiKeyStore();
-const creditLedger = new CreditLedger();
+const db = createDatabase(":memory:");
+const apiKeyStore = new ApiKeyStore(db);
+const creditLedger = new CreditLedger(db);
+const challengeStore = new ChallengeStore(db);
 const { rawKey: API_KEY } = apiKeyStore.create("fail-closed-test-account");
 creditLedger.topUp("fail-closed-test-account", 1000);
 
@@ -34,7 +38,7 @@ async function buildAppWithBrokenCoreweave(): Promise<FastifyInstance> {
   const built = Fastify({ logger: false });
   const cache = new IngestionCache([lambdaLabsAdapter, runpodAdapter, brokenCoreweaveAdapter], 300);
   await cache.ingestAll();
-  registerQuoteRoute(built, { cache, apiKeyStore, creditLedger, quoteTtlSeconds: 300 });
+  registerQuoteRoute(built, { cache, apiKeyStore, creditLedger, challengeStore, quoteTtlSeconds: 300 });
   return built;
 }
 
@@ -93,7 +97,7 @@ describe("CLAUDE.md §2 Fail-Closed Rule", () => {
     const built = Fastify({ logger: false });
     const cache = new IngestionCache([brokenLambda, brokenRunpod, brokenAll], 300);
     await cache.ingestAll();
-    registerQuoteRoute(built, { cache, apiKeyStore, creditLedger, quoteTtlSeconds: 300 });
+    registerQuoteRoute(built, { cache, apiKeyStore, creditLedger, challengeStore, quoteTtlSeconds: 300 });
     app = built;
 
     const res = await app.inject({

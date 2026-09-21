@@ -4,8 +4,10 @@ import { createIngestionCache } from "./ingestion/ingest.js";
 import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
 import { registerAdminRoutes } from "./api/routes/admin.js";
+import { createDatabase } from "./db/connection.js";
 import { ApiKeyStore } from "./billing/apiKeyStore.js";
 import { CreditLedger } from "./billing/creditLedger.js";
+import { ChallengeStore } from "./api/middleware/x402.js";
 import { logger } from "./utils/logger.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -26,20 +28,37 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET;
 // fall back to x402.ts's own DEFAULT_ROUTE_PRICE_USDC, keeping one
 // source of truth for the default instead of duplicating it here.
 const ROUTE_PRICE_USDC = process.env.ROUTE_PRICE_USDC ? Number(process.env.ROUTE_PRICE_USDC) : undefined;
+const DATABASE_PATH = process.env.DATABASE_PATH ?? "./data/scoutwyze-compute.db";
 
 async function main() {
   const app = Fastify({ logger: false });
+
+  // Durable storage (src/db/connection.ts) — API keys, credit ledger,
+  // and x402 challenge nonces all survive a restart now. The
+  // ingestion cache deliberately does NOT persist here (see
+  // ingest.ts's own reasoning) — it's rapidly-refreshed, perishable-
+  // by-design provider data, not account/billing state.
+  const db = createDatabase(DATABASE_PATH);
+  const apiKeyStore = new ApiKeyStore(db);
+  const creditLedger = new CreditLedger(db);
+  const challengeStore = new ChallengeStore(db);
+
   const cache = createIngestionCache(CACHE_TTL_SECONDS);
   const worker = new IngestionWorker(cache, INGESTION_REFRESH_INTERVAL_SECONDS);
-  const apiKeyStore = new ApiKeyStore();
-  const creditLedger = new CreditLedger();
 
   // CLAUDE.md §4 — populate the cache once at boot BEFORE serving any
   // traffic, then keep it warm on an interval. The route handler never
   // triggers ingestion itself.
   await worker.start();
 
-  registerQuoteRoute(app, { cache, apiKeyStore, creditLedger, quoteTtlSeconds: QUOTE_TTL_SECONDS, routePriceUsdc: ROUTE_PRICE_USDC });
+  registerQuoteRoute(app, {
+    cache,
+    apiKeyStore,
+    creditLedger,
+    challengeStore,
+    quoteTtlSeconds: QUOTE_TTL_SECONDS,
+    routePriceUsdc: ROUTE_PRICE_USDC,
+  });
 
   if (!ADMIN_SECRET) {
     logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");
@@ -54,11 +73,12 @@ async function main() {
 
   app.addHook("onClose", async () => {
     worker.stop();
+    db.close();
   });
 
   try {
     await app.listen({ port: PORT, host: "0.0.0.0" });
-    logger.info(`ScoutWyze Compute listening on :${PORT}`);
+    logger.info(`ScoutWyze Compute listening on :${PORT}`, { database: DATABASE_PATH });
   } catch (err) {
     logger.error("Failed to start server", { error: err instanceof Error ? err.message : String(err) });
     process.exit(1);

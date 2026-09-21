@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
 import {
-  challengeStore,
+  ChallengeStore,
   computeRequestHash,
   decodePaymentHeader,
   DEFAULT_ROUTE_PRICE_USDC,
@@ -27,6 +27,7 @@ declare module "fastify" {
 export interface AuthMiddlewareDeps {
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
+  challengeStore: ChallengeStore;
   routePriceUsdc?: number;
 }
 
@@ -105,7 +106,7 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
     const submission = decodePaymentHeader(typeof paymentHeader === "string" ? paymentHeader : undefined);
 
     if (!("error" in submission)) {
-      const consumed = challengeStore.consume(submission.nonce, submission.amountUsdc, now);
+      const consumed = deps.challengeStore.consume(submission.nonce, submission.amountUsdc, now);
       if (consumed.ok) {
         const receipt = signReceipt({
           requestHash,
@@ -117,15 +118,15 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
         request.authContext = { rail: "x402", identifier: submission.nonce.slice(0, 8) };
         return;
       }
-      sendPaymentRequired(reply, routePriceUsdc, now, consumed.reason);
+      sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, consumed.reason);
       return;
     }
 
-    sendPaymentRequired(reply, routePriceUsdc, now);
+    sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now);
   };
 }
 
-function sendPaymentRequired(reply: FastifyReply, priceUsdc: number, now: number, reason?: string): void {
+function sendPaymentRequired(reply: FastifyReply, challengeStore: ChallengeStore, priceUsdc: number, now: number, reason?: string): void {
   const challenge = challengeStore.issue(priceUsdc, now);
   reply.code(402).send({
     x402Version: 1,
