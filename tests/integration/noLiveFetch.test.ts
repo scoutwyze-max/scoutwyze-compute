@@ -49,7 +49,7 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
     }));
     const spyAdapter: ProviderAdapter = { id: "lambda_labs", fetch: fetchSpy };
 
-    const cache = new IngestionCache([spyAdapter]);
+    const cache = new IngestionCache([spyAdapter], 300);
     await cache.ingestAll();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
@@ -79,7 +79,7 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
       fetchedAt: new Date().toISOString(),
     }));
     const spyAdapter: ProviderAdapter = { id: "lambda_labs", fetch: fetchSpy };
-    const cache = new IngestionCache([spyAdapter]);
+    const cache = new IngestionCache([spyAdapter], 300);
 
     await cache.ingestAll();
     expect(fetchSpy).toHaveBeenCalledTimes(1);

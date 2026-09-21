@@ -21,10 +21,13 @@ export function buildRouteQuoteResponse(
   const excluded_providers: RouteQuoteResponse["excluded_providers"] = [];
   const allFacts = cacheStates.flatMap((state) => {
     // CLAUDE.md §2 Fail-Closed Rule — a provider whose last ingestion
-    // run failed contributes NOTHING to this response, and that's
-    // surfaced explicitly rather than just quietly having fewer quotes.
-    if (state.status === "failed") {
-      excluded_providers.push({ provider: state.provider, reason: state.lastError ?? "ingestion failed" });
+    // run failed, OR whose cached data has exceeded the cache's own
+    // strict TTL (IngestionCache.getStates() already re-derives "stale"
+    // status on every read, before this function ever sees it),
+    // contributes NOTHING to this response — surfaced explicitly rather
+    // than just quietly having fewer quotes.
+    if (state.status !== "ok") {
+      excluded_providers.push({ provider: state.provider, reason: state.lastError ?? `${state.status}` });
       return [];
     }
     return state.facts;

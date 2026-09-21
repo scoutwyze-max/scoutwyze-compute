@@ -24,7 +24,7 @@ const API_KEY = "fail_closed_test_key";
 
 async function buildAppWithBrokenCoreweave(): Promise<FastifyInstance> {
   const built = Fastify({ logger: false });
-  const cache = new IngestionCache([lambdaLabsAdapter, runpodAdapter, brokenCoreweaveAdapter]);
+  const cache = new IngestionCache([lambdaLabsAdapter, runpodAdapter, brokenCoreweaveAdapter], 300);
   await cache.ingestAll();
   registerQuoteRoute(built, { cache, validApiKeys: new Set([API_KEY]), quoteTtlSeconds: 300 });
   return built;
@@ -69,7 +69,7 @@ describe("CLAUDE.md §2 Fail-Closed Rule", () => {
   });
 
   it("a provider that has never successfully ingested contributes nothing rather than serving undefined/stale data", async () => {
-    const cache = new IngestionCache([brokenCoreweaveAdapter]);
+    const cache = new IngestionCache([brokenCoreweaveAdapter], 300);
     // Deliberately not calling ingestAll() — this is the boot-time,
     // never-yet-ingested state.
     const states = cache.getStates();
@@ -83,7 +83,7 @@ describe("CLAUDE.md §2 Fail-Closed Rule", () => {
     const brokenAll: ProviderAdapter = { id: "coreweave", async fetch() { throw new Error("outage: coreweave"); } };
 
     const built = Fastify({ logger: false });
-    const cache = new IngestionCache([brokenLambda, brokenRunpod, brokenAll]);
+    const cache = new IngestionCache([brokenLambda, brokenRunpod, brokenAll], 300);
     await cache.ingestAll();
     registerQuoteRoute(built, { cache, validApiKeys: new Set([API_KEY]), quoteTtlSeconds: 300 });
     app = built;
