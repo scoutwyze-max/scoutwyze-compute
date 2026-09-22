@@ -49,8 +49,12 @@ const BASE_RPC_URL = process.env.BASE_RPC_URL ?? "https://mainnet.base.org";
 // var falls back to an obvious placeholder rather than a guessed real
 // scoutwyze.com path, and logs a warning below so it's not silently wrong.
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ?? "";
-const CHECKOUT_SUCCESS_URL = process.env.CHECKOUT_SUCCESS_URL ?? "https://example.com/checkout/success";
-const CHECKOUT_CANCEL_URL = process.env.CHECKOUT_CANCEL_URL ?? "https://example.com/checkout/cancel";
+// `||`, not `??` — a .env line present but left blank (CHECKOUT_SUCCESS_URL=)
+// parses to an empty string, not undefined, so `??` would silently skip
+// the fallback and hand Stripe an empty success_url (a real 400 from
+// Stripe's own API, caught live while verifying this exact config).
+const CHECKOUT_SUCCESS_URL = process.env.CHECKOUT_SUCCESS_URL || "https://example.com/checkout/success";
+const CHECKOUT_CANCEL_URL = process.env.CHECKOUT_CANCEL_URL || "https://example.com/checkout/cancel";
 
 async function main() {
   const app = Fastify({ logger: false });
