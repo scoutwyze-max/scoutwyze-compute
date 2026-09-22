@@ -1,0 +1,69 @@
+# ScoutWyze Compute — Fly.io deployment config.
+#
+# SINGLE-INSTANCE BY DESIGN, not a placeholder to "improve later":
+# durable state is one local SQLite file (better-sqlite3, WAL mode) on
+# an attached volume, and the background ingestion worker is a single
+# in-process interval timer. Fly Volumes are per-machine, not shared —
+# scaling this app to >1 machine would give each machine its OWN
+# separate, silently-diverging database (an API key created on machine
+# A wouldn't exist on machine B; a credit balance would differ
+# depending on which machine handled a given request) and multiple
+# independent ingestion workers hammering the same fixture feeds for no
+# benefit. `min_machines_running = 1` / no additional `[[vm]]` count
+# entries here is deliberate — do not add horizontal scaling without
+# first re-architecting storage (e.g. LiteFS, or a real Postgres).
+#
+# Create the app + volume once (not needed again on subsequent
+# deploys):
+#   fly apps create scoutwyze-compute
+#   fly volumes create scoutwyze_compute_data --region iad --size 1
+# Then set real secrets (never in this file — Fly secrets are
+# encrypted, separate from [env] below):
+#   fly secrets set STRIPE_SECRET_KEY=sk_live_... STRIPE_WEBHOOK_SECRET=whsec_... \
+#     ADMIN_SECRET=... X402_RECEIPT_SIGNING_SECRET=... \
+#     CHECKOUT_SUCCESS_URL=... CHECKOUT_CANCEL_URL=...
+# Deploy:
+#   fly deploy
+
+app = "scoutwyze-compute"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "8787"
+  DATABASE_PATH = "/data/scoutwyze-compute.db"
+  # Not secrets — payTo is advertised in every 402 challenge response
+  # anyway (see src/index.ts's own reasoning). Real values, override via
+  # `fly secrets set` only if these ever need to change per-environment.
+  BASE_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9"
+  BASE_RPC_URL = "https://mainnet.base.org"
+
+[[mounts]]
+  source = "scoutwyze_compute_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # Kept running continuously, not auto-stopped on idle — the
+  # background ingestion cache (CLAUDE.md §4) needs to stay warm on its
+  # own interval regardless of request traffic; auto-stopping would
+  # mean serving stale/cold data on the first request after any idle
+  # period, which the whole point of the background-cache design is to
+  # avoid.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

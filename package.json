@@ -6,8 +6,10 @@
   "description": "Autonomous GPU placement recommendation and routing decision engine for AI infrastructure agents and MLOps pipelines.",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && npm run copy-fixtures",
+    "copy-fixtures": "mkdir -p dist/providers/fixtures && cp src/providers/fixtures/*.json dist/providers/fixtures/",
     "start": "node dist/index.js",
+    "smoke": "node scripts/smoke-test.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
