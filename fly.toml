@@ -20,28 +20,33 @@
 # Then set real secrets (never in this file — Fly secrets are
 # encrypted, separate from [env] below):
 #   fly secrets set STRIPE_SECRET_KEY=sk_live_... STRIPE_WEBHOOK_SECRET=whsec_... \
-#     ADMIN_SECRET=... X402_RECEIPT_SIGNING_SECRET=... \
-#     CHECKOUT_SUCCESS_URL=... CHECKOUT_CANCEL_URL=...
+#     ADMIN_SECRET=... X402_RECEIPT_SIGNING_SECRET=...
 # Deploy:
 #   fly deploy
 
-app = "scoutwyze-compute"
-primary_region = "iad"
+app = 'scoutwyze-compute'
+primary_region = 'iad'
 
 [build]
 
 [env]
-  PORT = "8787"
-  DATABASE_PATH = "/data/scoutwyze-compute.db"
+  PORT = '8787'
+  DATABASE_PATH = '/data/scoutwyze-compute.db'
   # Not secrets — payTo is advertised in every 402 challenge response
-  # anyway (see src/index.ts's own reasoning). Real values, override via
-  # `fly secrets set` only if these ever need to change per-environment.
-  BASE_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9"
-  BASE_RPC_URL = "https://mainnet.base.org"
+  # anyway (see src/index.ts's own reasoning). Real values, override
+  # here directly if they ever need to change.
+  BASE_TREASURY_ADDRESS = '0xc132a315a05541a4b72c272de539eb86de977fb9'
+  BASE_RPC_URL = 'https://mainnet.base.org'
+  # Where Stripe redirects after Checkout — the real live page (GET /),
+  # not the example.com placeholder src/index.ts falls back to when
+  # unset. Same URL for both: the page itself shows the funded balance
+  # on success, and is a harmless landing spot on cancel too.
+  CHECKOUT_SUCCESS_URL = 'https://scoutwyze-compute.fly.dev/'
+  CHECKOUT_CANCEL_URL = 'https://scoutwyze-compute.fly.dev/'
 
 [[mounts]]
-  source = "scoutwyze_compute_data"
-  destination = "/data"
+  source = 'scoutwyze_compute_data'
+  destination = '/data'
 
 [http_service]
   internal_port = 8787
@@ -52,18 +57,18 @@ primary_region = "iad"
   # mean serving stale/cold data on the first request after any idle
   # period, which the whole point of the background-cache design is to
   # avoid.
-  auto_stop_machines = false
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
 
   [[http_service.checks]]
-    grace_period = "15s"
-    interval = "30s"
-    method = "GET"
-    timeout = "5s"
-    path = "/healthz"
+    grace_period = '15s'
+    interval = '30s'
+    method = 'GET'
+    timeout = '5s'
+    path = '/healthz'
 
 [[vm]]
-  memory = "512mb"
-  cpu_kind = "shared"
+  memory = '512mb'
+  cpu_kind = 'shared'
   cpus = 1
