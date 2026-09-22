@@ -120,6 +120,18 @@ async function main() {
 
   if (!STRIPE_SECRET_KEY) {
     logger.warn("STRIPE_SECRET_KEY not set — /v1/checkout-sessions will fail every request with a 502 until it's configured.");
+  } else if (!/^sk_(live|test)_[A-Za-z0-9]+$/.test(STRIPE_SECRET_KEY)) {
+    // Real bug caught live, 2026-09-22: the Fly secret had a single
+    // stray non-ASCII character prepended (a smart-quote from an
+    // earlier text-editor paste) — 108 chars instead of 107, invisible
+    // in `fly secrets list` (digest only). Every checkout attempt threw
+    // a cryptic browser-side "Cannot convert argument to a ByteString"
+    // error instead of anything pointing at the real cause, because
+    // Node's fetch enforces ASCII headers on the OUTGOING call to
+    // Stripe and the route handler forwards that raw error to the
+    // client. This check turns that into a loud, specific startup
+    // warning instead of a per-request mystery.
+    logger.warn("STRIPE_SECRET_KEY is set but doesn't match the expected sk_live_/sk_test_ format — checkout session creation will fail. Check for a stray character (e.g. a smart-quote from a text editor paste) and re-set it via `fly secrets set`.");
   }
   if (!process.env.CHECKOUT_SUCCESS_URL || !process.env.CHECKOUT_CANCEL_URL) {
     logger.warn("CHECKOUT_SUCCESS_URL/CHECKOUT_CANCEL_URL not set — using placeholder example.com URLs, real Checkout Sessions will redirect nowhere useful.");
