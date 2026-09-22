@@ -90,15 +90,27 @@ describe("filterAndScore — scoring and ranking", () => {
     if (result.status === "ok") expect(result.ranked[0]?.sku).toBe("cheap");
   });
 
-  it("freshest preference ranks the more recently observed fact first even if pricier", () => {
+  it("fastest preference ranks the more recently observed fact first even if pricier", () => {
     const now = Date.now();
     const facts = [
       fact({ provider: "lambda_labs", instance_type: "cheap-stale", base_hourly_rate_usd: 5, observed_at: new Date(now - 55 * 60_000).toISOString() }),
       fact({ provider: "runpod", instance_type: "pricey-fresh", base_hourly_rate_usd: 40, observed_at: new Date(now).toISOString() }),
     ];
-    const result = filterAndScore({ preference: "freshest" }, [stateWith(facts)], now);
+    const result = filterAndScore({ preference: "fastest" }, [stateWith(facts)], now);
     expect(result.status).toBe("ok");
     if (result.status === "ok") expect(result.ranked[0]?.sku).toBe("pricey-fresh");
+  });
+
+  it("balanced preference weighs price and freshness equally", () => {
+    const now = Date.now();
+    // Same price, different freshness -> freshness alone decides.
+    const facts = [
+      fact({ provider: "lambda_labs", instance_type: "stale", base_hourly_rate_usd: 10, observed_at: new Date(now - 50 * 60_000).toISOString() }),
+      fact({ provider: "runpod", instance_type: "fresh", base_hourly_rate_usd: 10, observed_at: new Date(now).toISOString() }),
+    ];
+    const result = filterAndScore({ preference: "balanced" }, [stateWith(facts)], now);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") expect(result.ranked[0]?.sku).toBe("fresh");
   });
 
   it("tie-break: equal score falls back to lower price, then newer fetched_at", () => {
@@ -108,17 +120,19 @@ describe("filterAndScore — scoring and ranking", () => {
       fact({ provider: "runpod", instance_type: "b", base_hourly_rate_usd: 10, observed_at: new Date(now).toISOString() }),
     ];
     const result = filterAndScore({ preference: "cheapest" }, [stateWith(facts)], now);
-    // Identical price/freshness -> identical score -> tie-break order is deterministic, not crash-y or random.
     expect(result.status).toBe("ok");
     if (result.status === "ok") expect(result.ranked).toHaveLength(2);
   });
 
-  it("every ranked entry includes a real provider and a real $/hr in its reason", () => {
+  it("every ranked entry includes a real provider and a real $/hr in its reason, plus a score breakdown", () => {
     const result = filterAndScore({ preference: "cheapest" }, [stateWith([fact({ provider: "coreweave", base_hourly_rate_usd: 32.5 })])]);
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.ranked[0]?.reason).toContain("coreweave");
       expect(result.ranked[0]?.reason).toContain("$32.50/hr");
+      expect(result.ranked[0]?.scoreBreakdown.weights).toEqual({ price: 0.8, freshness: 0.2 });
+      expect(result.ranked[0]?.scoreBreakdown.priceScore).toBeGreaterThanOrEqual(0);
+      expect(result.ranked[0]?.scoreBreakdown.freshnessScore).toBeGreaterThanOrEqual(0);
     }
   });
 
@@ -128,7 +142,7 @@ describe("filterAndScore — scoring and ranking", () => {
       fact({ provider: "runpod", base_hourly_rate_usd: 100 }),
       fact({ provider: "coreweave", base_hourly_rate_usd: 50 }),
     ];
-    for (const preference of ["cheapest", "freshest", "available"] as const) {
+    for (const preference of ["cheapest", "fastest", "balanced"] as const) {
       const result = filterAndScore({ preference }, [stateWith(facts)]);
       expect(result.status).toBe("ok");
       if (result.status === "ok") {
@@ -177,7 +191,7 @@ describe("filterAndScore — against the real fixture-shaped data", () => {
     );
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.ranked[0]?.pricePerHour).toBe(11.8);
+      expect(result.ranked[0]?.vendorHourly).toBe(11.8);
       expect(result.ranked[0]?.provider).toBe("lambda_labs");
     }
   });

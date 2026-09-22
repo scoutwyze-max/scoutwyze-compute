@@ -78,8 +78,9 @@ describe("POST /v1/route/rank — real match debits exactly once and returns the
     const body = res.json();
     expect(body.status).toBe("ok");
     expect(body.recommended.provider).toBeTruthy();
-    expect(body.recommended.pricePerHour).toBeGreaterThan(0);
+    expect(body.recommended.vendorHourly).toBeGreaterThan(0);
     expect(body.recommended.reason).toMatch(/\$[\d.]+\/hr/);
+    expect(body.recommended.scoreBreakdown.weights).toEqual({ price: 0.8, freshness: 0.2 });
     expect(Array.isArray(body.alternatives)).toBe(true);
     expect(body.creditsRemaining).toBeCloseTo(balanceBefore - 0.15, 5);
 

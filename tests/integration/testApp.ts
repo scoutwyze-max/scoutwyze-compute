@@ -8,6 +8,7 @@ import { registerStripeWebhookRoute } from "../../src/api/routes/stripeWebhook.j
 import { registerSignupRoute } from "../../src/api/routes/signup.js";
 import { registerPublicSignupPage } from "../../src/api/routes/publicPage.js";
 import { registerRankRoute } from "../../src/api/routes/rank.js";
+import { registerBookRoute } from "../../src/api/routes/book.js";
 import { createDatabase } from "../../src/db/connection.js";
 import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
@@ -15,6 +16,7 @@ import { ChallengeStore } from "../../src/api/middleware/x402.js";
 import { ProcessedEventStore } from "../../src/payments/processedEvents.js";
 import { FakeChainReader } from "../helpers/fakeChainReader.js";
 import { FakeCheckoutSessionCreator } from "../helpers/fakeCheckoutSessionCreator.js";
+import { FakeVendorBooker } from "../helpers/fakeVendorBooker.js";
 
 const TEST_CACHE_TTL_SECONDS = 300; // generous — tests here aren't exercising TTL behavior itself
 const TEST_ACCOUNT_ID = "test-account";
@@ -38,6 +40,7 @@ export interface TestApp {
   adminSecret: string;
   stripeWebhookSecret: string;
   checkoutSessionCreator: FakeCheckoutSessionCreator;
+  lambdaLabsBooker: FakeVendorBooker;
 }
 
 export async function buildTestApp(): Promise<TestApp> {
@@ -78,6 +81,8 @@ export async function buildTestApp(): Promise<TestApp> {
   });
   registerPublicSignupPage(app);
   registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: 0.15 });
+  const lambdaLabsBooker = new FakeVendorBooker("lambda_labs");
+  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [lambdaLabsBooker] });
 
   app.addHook("onClose", async () => {
     db.close();
@@ -98,5 +103,6 @@ export async function buildTestApp(): Promise<TestApp> {
     adminSecret: TEST_ADMIN_SECRET,
     stripeWebhookSecret: TEST_STRIPE_WEBHOOK_SECRET,
     checkoutSessionCreator,
+    lambdaLabsBooker,
   };
 }

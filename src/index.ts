@@ -5,6 +5,8 @@ import { createIngestionCache } from "./ingestion/ingest.js";
 import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
 import { registerRankRoute } from "./api/routes/rank.js";
+import { registerBookRoute } from "./api/routes/book.js";
+import { SimulatedLambdaLabsBooker } from "./engine/vendorBooker.js";
 import { registerAdminRoutes } from "./api/routes/admin.js";
 import { registerStripeWebhookRoute } from "./api/routes/stripeWebhook.js";
 import { registerSignupRoute } from "./api/routes/signup.js";
@@ -104,6 +106,7 @@ async function main() {
     routePriceUsdc: ROUTE_PRICE_USDC,
   });
   registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: ROUTE_PRICE_USDC });
+  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [new SimulatedLambdaLabsBooker()] });
 
   if (!ADMIN_SECRET) {
     logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");

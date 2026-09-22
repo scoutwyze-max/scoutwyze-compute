@@ -18,7 +18,7 @@ const RankRequestBody = z.object({
   minVramGb: z.number().nonnegative().optional(),
   region: z.string().optional(),
   maxPricePerHour: z.number().positive().optional(),
-  preference: z.enum(["cheapest", "freshest", "available"]).default("cheapest"),
+  preference: z.enum(["cheapest", "fastest", "balanced"]).default("cheapest"),
 });
 
 /**

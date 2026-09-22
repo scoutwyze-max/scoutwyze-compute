@@ -1,7 +1,7 @@
 import type { CachedProviderState } from "../ingestion/cache.js";
 import type { ProviderId } from "../types/schema.js";
 
-export type Preference = "cheapest" | "freshest" | "available";
+export type Preference = "cheapest" | "fastest" | "balanced";
 
 export interface RankedQuoteRequest {
   gpuClass?: string;
@@ -11,14 +11,22 @@ export interface RankedQuoteRequest {
   preference: Preference;
 }
 
+export interface ScoreBreakdown {
+  priceScore: number;
+  freshnessScore: number;
+  weights: { price: number; freshness: number };
+  ageMinutes: number;
+}
+
 export interface RankedCandidate {
   provider: ProviderId;
   sku: string;
   region: string;
-  pricePerHour: number;
+  vendorHourly: number;
   vramGb: number;
   fetchedAt: string;
   score: number;
+  scoreBreakdown: ScoreBreakdown;
   reason: string;
 }
 
@@ -27,34 +35,46 @@ export type RankedScoringResult =
   | { status: "no_match" }
   | { status: "ok"; ranked: RankedCandidate[] };
 
-const WEIGHTS: Record<Preference, { price: number; fresh: number; avail: number }> = {
-  cheapest: { price: 0.7, fresh: 0.2, avail: 0.1 },
-  freshest: { price: 0.2, fresh: 0.7, avail: 0.1 },
-  available: { price: 0.2, fresh: 0.1, avail: 0.7 },
+/**
+ * Documented weights, real factors only — two, not three. An earlier
+ * version of this module also scored "availability" (weighted 0.1),
+ * but every fact reaching this cache has ALREADY passed availability
+ * filtering during ingestion (lambdaLabs.ts drops non-"available" raw
+ * entries before they ever become a ProviderObservedFacts) — so that
+ * third term was always exactly 1 for every candidate, a constant that
+ * never actually discriminated the ranking. Removed rather than kept
+ * as a no-op for false precision; a real availability signal (e.g.
+ * live quota/capacity data) would be a genuine third dimension worth
+ * adding back, once one exists to filter/score on.
+ *
+ * "fastest" is a documented proxy, not invented data: there's no real
+ * provisioning-latency field on ProviderObservedFacts, so "fastest" is
+ * approximated as "most recently observed" (freshest cache data is the
+ * best available signal for "still actually there right now," which is
+ * the practical meaning of "fast to get" without a real ETA field).
+ */
+const WEIGHTS: Record<Preference, { price: number; freshness: number }> = {
+  cheapest: { price: 0.8, freshness: 0.2 },
+  fastest: { price: 0.2, freshness: 0.8 },
+  balanced: { price: 0.5, freshness: 0.5 },
 };
 
 interface RawCandidate {
   provider: ProviderId;
   sku: string;
   region: string;
-  pricePerHour: number;
+  vendorHourly: number;
   vramGb: number;
   gpuModel: string;
   fetchedAt: string;
 }
 
 /**
- * Rules-only ranking for POST /v1/route/rank — no LLM, no booking.
- * Pure function: cache state + request in, a ranked list (or a real
- * "nothing to show" status) out. No I/O, no billing — the route
- * handler owns auth/debit around this.
- *
- * Real gap, not invented: ProviderObservedFacts has no availability/
- * in-stock boolean. Lambda Labs' adapter already drops non-"available"
- * raw entries during ingestion (lambdaLabs.ts) — everything reaching
- * this cache is implicitly available already, so availScore is always
- * 1 and the "in stock" hard filter is a no-op by construction, not
- * skipped by choice.
+ * Rules-only ranking for POST /v1/route/rank (and re-run server-side,
+ * never client-trusted, inside POST /v1/route/book) — no LLM, no
+ * booking logic itself. Pure function: cache state + request in, a
+ * ranked list (or a real "nothing to show" status) out. No I/O, no
+ * billing, no dispatch — callers own auth/debit/booking around this.
  */
 export function filterAndScore(request: RankedQuoteRequest, providerStates: CachedProviderState[], now: number = Date.now()): RankedScoringResult {
   const allFacts: RawCandidate[] = [];
@@ -64,7 +84,7 @@ export function filterAndScore(request: RankedQuoteRequest, providerStates: Cach
         provider: fact.provider,
         sku: fact.instance_type,
         region: fact.region,
-        pricePerHour: fact.base_hourly_rate_usd,
+        vendorHourly: fact.base_hourly_rate_usd,
         vramGb: fact.specs.gpu_memory_gb,
         gpuModel: fact.specs.gpu_model,
         fetchedAt: fact.observed_at,
@@ -79,31 +99,29 @@ export function filterAndScore(request: RankedQuoteRequest, providerStates: Cach
   const filtered = allFacts.filter((c) => {
     if (gpuClassLower && !c.gpuModel.toLowerCase().includes(gpuClassLower)) return false;
     if (request.minVramGb !== undefined && c.vramGb < request.minVramGb) return false;
-    if (request.maxPricePerHour !== undefined && c.pricePerHour > request.maxPricePerHour) return false;
+    if (request.maxPricePerHour !== undefined && c.vendorHourly > request.maxPricePerHour) return false;
     if (regionLower && !c.region.toLowerCase().startsWith(regionLower)) return false;
-    // availability hard filter — always true, see header comment
     return true;
   });
 
   if (filtered.length === 0) return { status: "no_match" };
 
-  const prices = filtered.map((c) => c.pricePerHour);
+  const prices = filtered.map((c) => c.vendorHourly);
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
   const weights = WEIGHTS[request.preference];
 
   const scored = filtered.map((c) => {
-    const priceScore = 1 - (c.pricePerHour - minPrice) / (maxPrice - minPrice || 1);
+    const priceScore = 1 - (c.vendorHourly - minPrice) / (maxPrice - minPrice || 1);
     const ageMinutes = Math.max(0, (now - new Date(c.fetchedAt).getTime()) / 60000);
-    const freshScore = 1 - Math.min(ageMinutes, 60) / 60;
-    const availScore = 1; // every cached fact already passed availability filtering at ingest
-    const score = priceScore * weights.price + freshScore * weights.fresh + availScore * weights.avail;
-    return { ...c, score, ageMinutes };
+    const freshnessScore = 1 - Math.min(ageMinutes, 60) / 60;
+    const score = priceScore * weights.price + freshnessScore * weights.freshness;
+    return { ...c, score, priceScore, freshnessScore, ageMinutes };
   });
 
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    if (a.pricePerHour !== b.pricePerHour) return a.pricePerHour - b.pricePerHour;
+    if (a.vendorHourly !== b.vendorHourly) return a.vendorHourly - b.vendorHourly;
     return new Date(b.fetchedAt).getTime() - new Date(a.fetchedAt).getTime();
   });
 
@@ -111,20 +129,26 @@ export function filterAndScore(request: RankedQuoteRequest, providerStates: Cach
     provider: c.provider,
     sku: c.sku,
     region: c.region,
-    pricePerHour: c.pricePerHour,
+    vendorHourly: c.vendorHourly,
     vramGb: c.vramGb,
     fetchedAt: c.fetchedAt,
     score: Math.round(c.score * 1000) / 1000,
+    scoreBreakdown: {
+      priceScore: Math.round(c.priceScore * 1000) / 1000,
+      freshnessScore: Math.round(c.freshnessScore * 1000) / 1000,
+      weights,
+      ageMinutes: Math.round(c.ageMinutes * 10) / 10,
+    },
     reason: buildReason(request.preference, c),
   }));
 
   return { status: "ok", ranked };
 }
 
-function buildReason(preference: Preference, c: { provider: ProviderId; pricePerHour: number; ageMinutes: number }): string {
-  const price = `$${c.pricePerHour.toFixed(2)}/hr`;
+function buildReason(preference: Preference, c: { provider: ProviderId; vendorHourly: number; ageMinutes: number; priceScore: number; freshnessScore: number }): string {
+  const price = `$${c.vendorHourly.toFixed(2)}/hr`;
   const age = c.ageMinutes < 1 ? "just now" : `${Math.round(c.ageMinutes)}m ago`;
-  if (preference === "freshest") return `Freshest match on ${c.provider}: updated ${age}, ${price}.`;
-  if (preference === "available") return `Available now on ${c.provider}: ${price}, updated ${age}.`;
-  return `Cheapest match on ${c.provider}: ${price}, updated ${age}.`;
+  if (preference === "fastest") return `Freshest data on ${c.provider}: updated ${age} (freshness score ${c.freshnessScore.toFixed(2)}), ${price}.`;
+  if (preference === "balanced") return `Best balance of price and freshness on ${c.provider}: ${price}, updated ${age}.`;
+  return `Cheapest match on ${c.provider}: ${price} (price score ${c.priceScore.toFixed(2)}), updated ${age}.`;
 }
