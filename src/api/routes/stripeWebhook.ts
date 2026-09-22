@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { CreditLedger } from "../../billing/creditLedger.js";
 import { ProcessedEventStore } from "../../payments/processedEvents.js";
 import { parseCheckoutCompletedEvent, verifyStripeSignature } from "../../payments/stripeWebhook.js";
+import { logger } from "../../utils/logger.js";
 import type Database from "better-sqlite3";
 
 export interface StripeWebhookDeps {
@@ -42,6 +43,7 @@ export function registerStripeWebhookRoute(app: FastifyInstance, deps: StripeWeb
         // 400, not 200 — Stripe's own guidance: reject invalid
         // signatures outright rather than silently no-op-200ing them,
         // so a real misconfiguration is loud, not silent.
+        logger.warn("stripe webhook: invalid signature", { reason: verification.reason });
         return reply.code(400).send({ error: "invalid_signature", reason: verification.reason });
       }
 
@@ -51,6 +53,7 @@ export function registerStripeWebhookRoute(app: FastifyInstance, deps: StripeWeb
         // metadata) is still a 200 — Stripe should not keep retrying a
         // webhook that will never become actionable no matter how many
         // times it's redelivered.
+        logger.info("stripe webhook: ignored", { reason: parsed.error });
         return reply.code(200).send({ received: true, action: "ignored", reason: parsed.error });
       }
 
@@ -58,10 +61,12 @@ export function registerStripeWebhookRoute(app: FastifyInstance, deps: StripeWeb
       if (!recorded) {
         // Real retry of an event we already credited — 200, no
         // double-charge. This is the actual idempotency guarantee.
+        logger.info("stripe webhook: duplicate, already credited", { eventId: parsed.eventId, accountId: parsed.accountId });
         return reply.code(200).send({ received: true, action: "duplicate_ignored" });
       }
 
       const entry = deps.creditLedger.topUp(parsed.accountId, parsed.amountUsd);
+      logger.info("stripe webhook: credited", { eventId: parsed.eventId, accountId: parsed.accountId, amountUsd: parsed.amountUsd });
       return reply.code(200).send({ received: true, action: "credited", entry });
     });
   });
