@@ -39,6 +39,11 @@ const HTML = `<!DOCTYPE html>
   <h1>ScoutWyze Compute</h1>
   <p>GPU placement quotes for AI infra agents. Get a free API key, then fund it to start making requests.</p>
 
+  <div style="background:#f5f5f5;border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px;line-height:1.6">
+    <div><strong>POST /v1/route/rank</strong> — live. Rule-based ranking (cheapest / fastest / balanced) over real ingested provider data.</div>
+    <div><strong>POST /v1/route/book</strong> — preview / simulated. Dispatch logic and billing are real; the actual vendor call is a simulated placeholder (no real GPU is provisioned yet).</div>
+  </div>
+
   <button id="createBtn">Create API Key</button>
   <div id="error"></div>
 
