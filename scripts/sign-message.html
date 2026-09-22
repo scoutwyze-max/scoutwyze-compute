@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<!--
+  One-off local signing tool for the x402 payment authorization message
+  (src/payments/baseVerification.ts's buildPaymentAuthorizationMessage).
+  Talks to whatever wallet extension injects window.ethereum (Rabby,
+  MetaMask, etc.) via the standard EIP-1193 personal_sign RPC call —
+  no CDN, no WalletConnect account, no server, fully offline except for
+  the extension itself. Open this file directly in a browser
+  (double-click, or `open scripts/sign-message.html`).
+
+  IMPORTANT: the connected wallet account must be the SAME address that
+  sent the on-chain USDC transfer (payerAddress) — the server checks
+  that the recovered signer matches payerAddress exactly.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>x402 payment message signer</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; }
+  label { display: block; margin-top: 16px; font-weight: 600; font-size: 13px; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px; font-family: monospace; font-size: 13px; margin-top: 4px; }
+  button { margin-top: 16px; padding: 10px 20px; font-size: 14px; cursor: pointer; }
+  #status { margin-top: 16px; padding: 10px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
+  .ok { background: #e6f7e6; }
+  .err { background: #fde8e8; }
+  .info { background: #eef2ff; }
+  #result { margin-top: 16px; }
+  #signature { background: #f5f5f5; }
+</style>
+</head>
+<body>
+  <h2>x402 payment message signer</h2>
+  <p>Fills in the exact canonical message the server expects, then signs it via your connected wallet extension.</p>
+
+  <label>Nonce (from the 402 challenge)</label>
+  <input id="nonce" placeholder="e.g. 0aea4554-d049-48be-99e1-1c3561755cf4">
+
+  <label>Amount USDC (from challenge's maxAmountRequired)</label>
+  <input id="amount" value="0.15">
+
+  <label>txHash (from your on-chain USDC transfer)</label>
+  <input id="txhash" placeholder="0x...">
+
+  <label>Network</label>
+  <input id="network" value="base" readonly>
+
+  <label>Exact message to be signed (read-only, auto-built — must match server exactly)</label>
+  <textarea id="message" rows="6" readonly></textarea>
+
+  <button id="connectBtn">1. Connect Wallet</button>
+  <button id="signBtn" disabled>2. Sign Message</button>
+
+  <div id="status"></div>
+
+  <div id="result" style="display:none">
+    <label>Connected / signing address (must equal payerAddress)</label>
+    <input id="signerAddress" readonly>
+    <label>Signature (copy this into pay-x402-quote.mjs)</label>
+    <textarea id="signature" rows="3" readonly></textarea>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let connectedAddress = null;
+
+  function buildMessage() {
+    const nonce = $('nonce').value.trim();
+    const amount = $('amount').value.trim();
+    const txhash = $('txhash').value.trim();
+    const network = $('network').value.trim();
+    return [
+      "ScoutWyze Compute Payment Authorization",
+      `nonce: ${nonce}`,
+      `amount: ${amount} USDC`,
+      `txHash: ${txhash}`,
+      `network: ${network}`,
+    ].join("\n");
+  }
+
+  function refreshMessage() {
+    $('message').value = buildMessage();
+  }
+  ['nonce', 'amount', 'txhash', 'network'].forEach((id) => $(id).addEventListener('input', refreshMessage));
+  refreshMessage();
+
+  function setStatus(text, cls) {
+    const el = $('status');
+    el.textContent = text;
+    el.className = cls;
+  }
+
+  $('connectBtn').addEventListener('click', async () => {
+    if (!window.ethereum) {
+      setStatus("No injected wallet found (window.ethereum is undefined). Make sure Rabby or MetaMask is installed and enabled for this page.", 'err');
+      return;
+    }
+    try {
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      connectedAddress = accounts[0];
+      setStatus(`Connected: ${connectedAddress}\n\nDouble-check this matches your payerAddress before signing.`, 'info');
+      $('signBtn').disabled = false;
+    } catch (err) {
+      setStatus(`Connection failed: ${err.message}`, 'err');
+    }
+  });
+
+  $('signBtn').addEventListener('click', async () => {
+    if (!connectedAddress) return;
+    const message = buildMessage();
+    if (!$('nonce').value.trim() || !$('txhash').value.trim()) {
+      setStatus("Fill in nonce and txHash first.", 'err');
+      return;
+    }
+    try {
+      // personal_sign expects the message as a hex-encoded UTF-8 byte
+      // string per EIP-1193 convention — matches what ethers.verifyMessage()
+      // on the server reconstructs from the plain string.
+      const hexMessage = '0x' + Array.from(new TextEncoder().encode(message)).map((b) => b.toString(16).padStart(2, '0')).join('');
+      const signature = await window.ethereum.request({
+        method: 'personal_sign',
+        params: [hexMessage, connectedAddress],
+      });
+      $('result').style.display = 'block';
+      $('signerAddress').value = connectedAddress;
+      $('signature').value = signature;
+      setStatus("Signed successfully. Copy the signature below.", 'ok');
+    } catch (err) {
+      setStatus(`Signing failed or rejected: ${err.message}`, 'err');
+    }
+  });
+</script>
+</body>
+</html>
