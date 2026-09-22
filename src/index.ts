@@ -4,6 +4,7 @@ import { ethers } from "ethers";
 import { createIngestionCache } from "./ingestion/ingest.js";
 import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
+import { registerRankRoute } from "./api/routes/rank.js";
 import { registerAdminRoutes } from "./api/routes/admin.js";
 import { registerStripeWebhookRoute } from "./api/routes/stripeWebhook.js";
 import { registerSignupRoute } from "./api/routes/signup.js";
@@ -102,6 +103,7 @@ async function main() {
     quoteTtlSeconds: QUOTE_TTL_SECONDS,
     routePriceUsdc: ROUTE_PRICE_USDC,
   });
+  registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: ROUTE_PRICE_USDC });
 
   if (!ADMIN_SECRET) {
     logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");
