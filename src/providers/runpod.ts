@@ -13,6 +13,14 @@ const FIXTURE_PATH = path.join(__dirname, "fixtures", "runpod.fixture.json");
 // spotPrice populated. That's not malformed data, it's just a different
 // capacity type — the adapter has to know the domain, not just validate
 // a shape.
+//
+// gpuTypeId/dataCenter values in the fixture are real, verified strings
+// (not invented) — confirmed 2026-09-22 against RunPod's own
+// GET /v2/catalog/gpus?include=AVAILABILITY&product=POD, after an
+// earlier fixture version used a Lambda-style invented ID
+// ("H100_80GB_SXM") that RunPod's real /v2/pods rejected with a 422.
+// These pass straight through to RunPodBooker's real launch request
+// (gpu.id / dataCenterIds) unchanged, same as Lambda Labs' fixture.
 interface RunpodRawEntry {
   gpuTypeId: string;
   gpuCount: number;

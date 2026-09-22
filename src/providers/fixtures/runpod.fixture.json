@@ -1,8 +1,8 @@
 [
   {
-    "gpuTypeId": "H100_80GB_SXM",
+    "gpuTypeId": "NVIDIA H100 80GB HBM3",
     "gpuCount": 8,
-    "dataCenter": "US-TX-1",
+    "dataCenter": "US-MO-1",
     "cloudType": "SECURE",
     "pricePerGpuHr": 2.79,
     "vcpuCount": 192,
@@ -12,7 +12,7 @@
     "spotPrice": null
   },
   {
-    "gpuTypeId": "H100_80GB_SXM",
+    "gpuTypeId": "NVIDIA H100 80GB HBM3",
     "gpuCount": 8,
     "dataCenter": "US-CA-2",
     "cloudType": "SECURE",
@@ -24,9 +24,9 @@
     "spotPrice": 1.89
   },
   {
-    "gpuTypeId": "H100_80GB_SXM",
+    "gpuTypeId": "NVIDIA H100 80GB HBM3",
     "gpuCount": 8,
-    "dataCenter": "US-NJ-1",
+    "dataCenter": "US-GA-2",
     "cloudType": "COMMUNITY",
     "pricePerGpuHr": null,
     "vcpuCount": 192,
@@ -36,9 +36,9 @@
     "spotPrice": 1.72
   },
   {
-    "gpuTypeId": "H100_80GB_SXM",
+    "gpuTypeId": "NVIDIA H100 80GB HBM3",
     "gpuCount": 8,
-    "dataCenter": "US-WA-1",
+    "dataCenter": "US-NE-1",
     "cloudType": "COMMUNITY",
     "pricePerGpuHr": null,
     "vcpuCount": null,

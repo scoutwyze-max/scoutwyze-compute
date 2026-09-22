@@ -174,10 +174,27 @@ export class RunPodBooker implements VendorBooker {
       return { ok: false, reason: `RunPod API request failed: ${err instanceof Error ? err.message : String(err)}` };
     }
 
-    const body = (await res.json().catch(() => null)) as { id?: string; status?: string; error?: string; message?: string } | null;
+    const body = (await res.json().catch(() => null)) as {
+      id?: string;
+      status?: string;
+      error?: string;
+      message?: string;
+      detail?: string;
+      errors?: string[];
+    } | null;
 
     if (!res.ok) {
-      return { ok: false, reason: body?.error ?? body?.message ?? `RunPod API returned HTTP ${res.status}` };
+      // Real RunPod error shape (verified 2026-09-22 against a live 422):
+      // { title, status, detail, errors: string[] }. error/message are
+      // kept as fallbacks in case other RunPod error responses (e.g.
+      // 401/500) use a simpler shape than validation errors do.
+      const reason =
+        body?.detail ??
+        (Array.isArray(body?.errors) && body.errors.length > 0 ? body.errors.join("; ") : undefined) ??
+        body?.error ??
+        body?.message ??
+        `RunPod API returned HTTP ${res.status}`;
+      return { ok: false, reason };
     }
     if (!body?.id) {
       return { ok: false, reason: "RunPod API returned success but no pod id in the response" };

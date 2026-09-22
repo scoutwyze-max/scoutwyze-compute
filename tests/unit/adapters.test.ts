@@ -15,7 +15,7 @@ describe("runpodAdapter — fail-closed on unusable entries", () => {
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0]?.reason).toMatch(/no usable on-demand or spot rate/);
 
-    const spotEntry = result.facts.find((f) => f.region === "US-NJ-1");
+    const spotEntry = result.facts.find((f) => f.region === "US-GA-2" && f.capacity_type === "spot");
     expect(spotEntry?.capacity_type).toBe("spot");
     // 1.72/GPU * 8 GPUs — the adapter's own per-GPU -> per-node math.
     expect(spotEntry?.base_hourly_rate_usd).toBeCloseTo(13.76, 2);
@@ -24,7 +24,7 @@ describe("runpodAdapter — fail-closed on unusable entries", () => {
   it("never lets a rejected raw entry leak into the normalized facts array", async () => {
     const result = await runpodAdapter.fetch();
     const regions = result.facts.map((f) => f.region);
-    expect(regions).not.toContain("US-WA-1");
+    expect(regions).not.toContain("US-NE-1");
   });
 });
 
