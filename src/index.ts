@@ -7,6 +7,7 @@ import { registerQuoteRoute } from "./api/routes/quote.js";
 import { registerAdminRoutes } from "./api/routes/admin.js";
 import { registerStripeWebhookRoute } from "./api/routes/stripeWebhook.js";
 import { registerSignupRoute } from "./api/routes/signup.js";
+import { registerPublicSignupPage } from "./api/routes/publicPage.js";
 import { createDatabase } from "./db/connection.js";
 import { ApiKeyStore } from "./billing/apiKeyStore.js";
 import { CreditLedger } from "./billing/creditLedger.js";
@@ -129,6 +130,7 @@ async function main() {
     checkoutSuccessUrl: CHECKOUT_SUCCESS_URL,
     checkoutCancelUrl: CHECKOUT_CANCEL_URL,
   });
+  registerPublicSignupPage(app);
 
   app.get("/healthz", async () => ({
     status: "ok",

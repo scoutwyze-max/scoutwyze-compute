@@ -6,6 +6,7 @@ import { registerQuoteRoute } from "../../src/api/routes/quote.js";
 import { registerAdminRoutes } from "../../src/api/routes/admin.js";
 import { registerStripeWebhookRoute } from "../../src/api/routes/stripeWebhook.js";
 import { registerSignupRoute } from "../../src/api/routes/signup.js";
+import { registerPublicSignupPage } from "../../src/api/routes/publicPage.js";
 import { createDatabase } from "../../src/db/connection.js";
 import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
@@ -74,6 +75,7 @@ export async function buildTestApp(): Promise<TestApp> {
     checkoutSuccessUrl: "https://example.com/success",
     checkoutCancelUrl: "https://example.com/cancel",
   });
+  registerPublicSignupPage(app);
 
   app.addHook("onClose", async () => {
     db.close();
