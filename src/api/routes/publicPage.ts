@@ -8,13 +8,21 @@ import type { FastifyInstance } from "fastify";
  * Checkout Session URL is a plain browser navigation, not a client-side
  * Stripe SDK call). Never touches /v1/admin/* or ADMIN_SECRET.
  */
-export function registerPublicSignupPage(app: FastifyInstance): void {
+export interface PublicPageDeps {
+  lambdaDispatchIsReal: boolean;
+}
+
+export function registerPublicSignupPage(app: FastifyInstance, deps: PublicPageDeps): void {
   app.get("/", async (_request, reply) => {
-    reply.type("text/html").send(HTML);
+    reply.type("text/html").send(buildHtml(deps.lambdaDispatchIsReal));
   });
 }
 
-const HTML = `<!DOCTYPE html>
+function buildHtml(lambdaDispatchIsReal: boolean): string {
+  const bookStatusLine = lambdaDispatchIsReal
+    ? `<strong>POST /v1/route/book</strong> — live for Lambda Labs. Other providers (RunPod, CoreWeave) still return a real "preview/unsupported" response, not fake dispatch.`
+    : `<strong>POST /v1/route/book</strong> — preview / simulated. Dispatch logic and billing are real; the actual vendor call is a simulated placeholder (no real GPU is provisioned yet).`;
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -41,7 +49,7 @@ const HTML = `<!DOCTYPE html>
 
   <div style="background:#f5f5f5;border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px;line-height:1.6">
     <div><strong>POST /v1/route/rank</strong> — live. Rule-based ranking (cheapest / fastest / balanced) over real ingested provider data.</div>
-    <div><strong>POST /v1/route/book</strong> — preview / simulated. Dispatch logic and billing are real; the actual vendor call is a simulated placeholder (no real GPU is provisioned yet).</div>
+    <div>${bookStatusLine}</div>
   </div>
 
   <button id="createBtn">Create API Key</button>
@@ -110,3 +118,4 @@ const HTML = `<!DOCTYPE html>
 </script>
 </body>
 </html>`;
+}

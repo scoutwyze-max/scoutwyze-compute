@@ -63,7 +63,7 @@ describe("POST /v1/route/book — auth", () => {
 });
 
 describe("POST /v1/route/book — successful booking debits after vendor acceptance", () => {
-  it("200s with vendor/jobId/connectInfo/quotedPrice/creditsRemaining, and debits hours * vendorHourly", async () => {
+  it("200s with vendor/jobId/connectInfo/quotedPrice/creditsRemaining, and debits the marked-up quotedPrice (not raw vendor cost)", async () => {
     built = await buildTestApp();
     built.lambdaLabsBooker.setShouldSucceed(true);
     const balanceBefore = built.creditLedger.getBalance(built.accountId);
@@ -82,6 +82,12 @@ describe("POST /v1/route/book — successful booking debits after vendor accepta
     expect(body.jobId).toBeTruthy();
     expect(body.connectInfo).toBeTruthy();
     expect(body.quotedPrice).toBeGreaterThan(0);
+    // The real point of the markup change: quotedPrice must be STRICTLY
+    // greater than raw vendor cost — a passing test here would have
+    // caught the old zero-margin pass-through bug directly.
+    expect(body.quotedPrice).toBeGreaterThan(body.vendorCost);
+    expect(body.margin).toBeGreaterThan(0);
+    expect(body.quotedPrice).toBeCloseTo(body.vendorCost * (1 + body.margin), 5);
     expect(body.creditsRemaining).toBeCloseTo(balanceBefore - body.quotedPrice, 5);
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore - body.quotedPrice, 5);
 

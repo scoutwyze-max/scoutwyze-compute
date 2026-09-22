@@ -79,7 +79,7 @@ export async function buildTestApp(): Promise<TestApp> {
     checkoutSuccessUrl: "https://example.com/success",
     checkoutCancelUrl: "https://example.com/cancel",
   });
-  registerPublicSignupPage(app);
+  registerPublicSignupPage(app, { lambdaDispatchIsReal: false });
   registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: 0.15 });
   const lambdaLabsBooker = new FakeVendorBooker("lambda_labs");
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [lambdaLabsBooker] });

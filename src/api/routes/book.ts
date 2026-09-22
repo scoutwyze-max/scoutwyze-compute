@@ -13,7 +13,15 @@ export interface BookRouteDeps {
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
   bookers: VendorBooker[];
+  bookingMargin?: number;
 }
+
+// Real gap closed, 2026-09-22: booking previously charged
+// hours * vendorHourly with ZERO margin — a real pass-through, not a
+// business. 0.15 (15%) is a documented DEFAULT, not a considered
+// pricing decision — override via bookingMargin when a real number
+// exists.
+export const DEFAULT_BOOKING_MARGIN = 0.15;
 
 // Deliberately NO provider field — "the server MUST re-run rank; do
 // not trust a client-supplied provider" is enforced structurally here,
@@ -32,11 +40,12 @@ const BookRequestBody = z.object({
  * POST /v1/route/book — re-runs the exact same server-side ranking as
  * POST /v1/route/rank (same filterAndScore call, same cache read),
  * then dispatches ONLY to whichever provider that ranking actually
- * recommends. One real booker implemented this pass
- * (SimulatedLambdaLabsBooker, see vendorBooker.ts's own header comment
- * for why it's simulated, not a real vendor API call yet) — a
- * recommendation for any other provider returns a real, honest
- * "unsupported_provider" response rather than fabricating dispatch.
+ * recommends. lambda_labs dispatches for real (LambdaLabsBooker,
+ * vendorBooker.ts) when LAMBDA_API_KEY is configured, falling back to
+ * SimulatedLambdaLabsBooker otherwise (dev/no-key convenience — see
+ * index.ts's wiring). A recommendation for any other provider returns
+ * a real, honest "unsupported_provider" response rather than
+ * fabricating dispatch.
  *
  * Debit-after-success, not before: the vendor booker is called FIRST;
  * CreditLedger.charge() only runs once it returns ok:true. A vendor
@@ -50,6 +59,7 @@ const BookRequestBody = z.object({
  */
 export function registerBookRoute(app: FastifyInstance, deps: BookRouteDeps): void {
   const bookersByProvider = new Map<ProviderId, VendorBooker>(deps.bookers.map((b) => [b.providerId, b]));
+  const margin = deps.bookingMargin ?? DEFAULT_BOOKING_MARGIN;
 
   app.post("/v1/route/book", async (request, reply) => {
     const parsedBody = BookRequestBody.safeParse(request.body ?? {});
@@ -95,7 +105,8 @@ export function registerBookRoute(app: FastifyInstance, deps: BookRouteDeps): vo
       return reply.code(200).send({ status: "vendor_declined", reason: bookingResult.reason, recommended });
     }
 
-    const quotedPrice = Math.round(hours * recommended.vendorHourly * 100) / 100;
+    const vendorCost = Math.round(hours * recommended.vendorHourly * 100) / 100;
+    const quotedPrice = Math.round(vendorCost * (1 + margin) * 100) / 100;
     const requestHash = computeRequestHash(parsedBody.data);
     const charge = deps.creditLedger.charge(keyRecord.accountId, quotedPrice, requestHash);
     if (!charge.ok) {
@@ -118,6 +129,8 @@ export function registerBookRoute(app: FastifyInstance, deps: BookRouteDeps): vo
       jobId: bookingResult.jobId,
       connectInfo: bookingResult.connectInfo,
       quotedPrice,
+      vendorCost,
+      margin,
       creditsRemaining: charge.balanceAfterUsd,
     });
   });

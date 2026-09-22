@@ -6,7 +6,7 @@ import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
 import { registerRankRoute } from "./api/routes/rank.js";
 import { registerBookRoute } from "./api/routes/book.js";
-import { SimulatedLambdaLabsBooker } from "./engine/vendorBooker.js";
+import { SimulatedLambdaLabsBooker, LambdaLabsBooker } from "./engine/vendorBooker.js";
 import { registerAdminRoutes } from "./api/routes/admin.js";
 import { registerStripeWebhookRoute } from "./api/routes/stripeWebhook.js";
 import { registerSignupRoute } from "./api/routes/signup.js";
@@ -59,6 +59,12 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ?? "";
 // Stripe's own API, caught live while verifying this exact config).
 const CHECKOUT_SUCCESS_URL = process.env.CHECKOUT_SUCCESS_URL || "https://example.com/checkout/success";
 const CHECKOUT_CANCEL_URL = process.env.CHECKOUT_CANCEL_URL || "https://example.com/checkout/cancel";
+// Real Lambda Cloud dispatch (src/engine/vendorBooker.ts) when set;
+// falls back to the simulated booker otherwise — same "insecure/no-op
+// default with a loud warning" posture as the other optional secrets
+// in this file, not a silent swap.
+const LAMBDA_API_KEY = process.env.LAMBDA_API_KEY;
+const LAMBDA_SSH_KEY_NAME = process.env.LAMBDA_SSH_KEY_NAME;
 
 async function main() {
   const app = Fastify({ logger: false });
@@ -106,7 +112,16 @@ async function main() {
     routePriceUsdc: ROUTE_PRICE_USDC,
   });
   registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: ROUTE_PRICE_USDC });
-  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [new SimulatedLambdaLabsBooker()] });
+  if (LAMBDA_API_KEY) {
+    if (!LAMBDA_SSH_KEY_NAME) {
+      logger.warn("LAMBDA_API_KEY is set but LAMBDA_SSH_KEY_NAME is not — every real Lambda booking will fail closed until an existing SSH key name is configured.");
+    }
+    logger.info("Lambda Labs dispatch: REAL (LAMBDA_API_KEY configured)");
+  } else {
+    logger.warn("LAMBDA_API_KEY not set — Lambda Labs dispatch is SIMULATED, no real instance will ever be provisioned.");
+  }
+  const lambdaBooker = LAMBDA_API_KEY ? new LambdaLabsBooker(LAMBDA_API_KEY, LAMBDA_SSH_KEY_NAME) : new SimulatedLambdaLabsBooker();
+  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [lambdaBooker] });
 
   if (!ADMIN_SECRET) {
     logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");
@@ -147,7 +162,7 @@ async function main() {
     checkoutSuccessUrl: CHECKOUT_SUCCESS_URL,
     checkoutCancelUrl: CHECKOUT_CANCEL_URL,
   });
-  registerPublicSignupPage(app);
+  registerPublicSignupPage(app, { lambdaDispatchIsReal: !!LAMBDA_API_KEY });
 
   app.get("/healthz", async () => ({
     status: "ok",
