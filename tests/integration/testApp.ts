@@ -41,6 +41,7 @@ export interface TestApp {
   stripeWebhookSecret: string;
   checkoutSessionCreator: FakeCheckoutSessionCreator;
   lambdaLabsBooker: FakeVendorBooker;
+  runpodBooker: FakeVendorBooker;
 }
 
 export async function buildTestApp(): Promise<TestApp> {
@@ -79,10 +80,11 @@ export async function buildTestApp(): Promise<TestApp> {
     checkoutSuccessUrl: "https://example.com/success",
     checkoutCancelUrl: "https://example.com/cancel",
   });
-  registerPublicSignupPage(app, { lambdaDispatchIsReal: false });
+  registerPublicSignupPage(app, { lambdaDispatchIsReal: false, runpodDispatchIsReal: false });
   registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: 0.15 });
   const lambdaLabsBooker = new FakeVendorBooker("lambda_labs");
-  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [lambdaLabsBooker] });
+  const runpodBooker = new FakeVendorBooker("runpod");
+  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [lambdaLabsBooker, runpodBooker] });
 
   app.addHook("onClose", async () => {
     db.close();
@@ -104,5 +106,6 @@ export async function buildTestApp(): Promise<TestApp> {
     stripeWebhookSecret: TEST_STRIPE_WEBHOOK_SECRET,
     checkoutSessionCreator,
     lambdaLabsBooker,
+    runpodBooker,
   };
 }

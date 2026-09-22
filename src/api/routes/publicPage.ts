@@ -10,17 +10,19 @@ import type { FastifyInstance } from "fastify";
  */
 export interface PublicPageDeps {
   lambdaDispatchIsReal: boolean;
+  runpodDispatchIsReal: boolean;
 }
 
 export function registerPublicSignupPage(app: FastifyInstance, deps: PublicPageDeps): void {
   app.get("/", async (_request, reply) => {
-    reply.type("text/html").send(buildHtml(deps.lambdaDispatchIsReal));
+    reply.type("text/html").send(buildHtml(deps.lambdaDispatchIsReal, deps.runpodDispatchIsReal));
   });
 }
 
-function buildHtml(lambdaDispatchIsReal: boolean): string {
-  const bookStatusLine = lambdaDispatchIsReal
-    ? `<strong>POST /v1/route/book</strong> — live for Lambda Labs. Other providers (RunPod, CoreWeave) still return a real "preview/unsupported" response, not fake dispatch.`
+function buildHtml(lambdaDispatchIsReal: boolean, runpodDispatchIsReal: boolean): string {
+  const liveVendors = [lambdaDispatchIsReal && "Lambda Labs", runpodDispatchIsReal && "RunPod"].filter(Boolean) as string[];
+  const bookStatusLine = liveVendors.length > 0
+    ? `<strong>POST /v1/route/book</strong> — live for ${liveVendors.join(" and ")}. Other providers still return a real "preview/unsupported" response, not fake dispatch.`
     : `<strong>POST /v1/route/book</strong> — preview / simulated. Dispatch logic and billing are real; the actual vendor call is a simulated placeholder (no real GPU is provisioned yet).`;
   return `<!DOCTYPE html>
 <html lang="en">

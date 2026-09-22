@@ -6,7 +6,7 @@ import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
 import { registerRankRoute } from "./api/routes/rank.js";
 import { registerBookRoute } from "./api/routes/book.js";
-import { SimulatedLambdaLabsBooker, LambdaLabsBooker } from "./engine/vendorBooker.js";
+import { SimulatedLambdaLabsBooker, LambdaLabsBooker, RunPodBooker, type VendorBooker } from "./engine/vendorBooker.js";
 import { registerAdminRoutes } from "./api/routes/admin.js";
 import { registerStripeWebhookRoute } from "./api/routes/stripeWebhook.js";
 import { registerSignupRoute } from "./api/routes/signup.js";
@@ -65,6 +65,15 @@ const CHECKOUT_CANCEL_URL = process.env.CHECKOUT_CANCEL_URL || "https://example.
 // in this file, not a silent swap.
 const LAMBDA_API_KEY = process.env.LAMBDA_API_KEY;
 const LAMBDA_SSH_KEY_NAME = process.env.LAMBDA_SSH_KEY_NAME;
+// Real RunPod dispatch when set — no simulated fallback for RunPod
+// specifically (unlike Lambda): if RUNPOD_API_KEY is configured,
+// RunPod bookings go through the real RunPodBooker or not at all;
+// there's no "no key" state where RunPod is a supported provider.
+const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
+// Real product decisions with no answer elsewhere in this codebase —
+// documented defaults, not considered business choices.
+const RUNPOD_IMAGE = process.env.RUNPOD_IMAGE || "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel";
+const RUNPOD_DISK_GB = Number(process.env.RUNPOD_DISK_GB ?? 50);
 
 async function main() {
   const app = Fastify({ logger: false });
@@ -121,7 +130,14 @@ async function main() {
     logger.warn("LAMBDA_API_KEY not set — Lambda Labs dispatch is SIMULATED, no real instance will ever be provisioned.");
   }
   const lambdaBooker = LAMBDA_API_KEY ? new LambdaLabsBooker(LAMBDA_API_KEY, LAMBDA_SSH_KEY_NAME) : new SimulatedLambdaLabsBooker();
-  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [lambdaBooker] });
+  const bookers: VendorBooker[] = [lambdaBooker];
+  if (RUNPOD_API_KEY) {
+    logger.info("RunPod dispatch: REAL (RUNPOD_API_KEY configured)");
+    bookers.push(new RunPodBooker(RUNPOD_API_KEY, RUNPOD_IMAGE, RUNPOD_DISK_GB));
+  } else {
+    logger.warn("RUNPOD_API_KEY not set — a rank recommending runpod will return unsupported_provider on /v1/route/book.");
+  }
+  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
 
   if (!ADMIN_SECRET) {
     logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");
@@ -162,7 +178,7 @@ async function main() {
     checkoutSuccessUrl: CHECKOUT_SUCCESS_URL,
     checkoutCancelUrl: CHECKOUT_CANCEL_URL,
   });
-  registerPublicSignupPage(app, { lambdaDispatchIsReal: !!LAMBDA_API_KEY });
+  registerPublicSignupPage(app, { lambdaDispatchIsReal: !!LAMBDA_API_KEY, runpodDispatchIsReal: !!RUNPOD_API_KEY });
 
   app.get("/healthz", async () => ({
     status: "ok",

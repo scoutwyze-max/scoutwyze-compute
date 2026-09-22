@@ -24,6 +24,7 @@ export interface RankedCandidate {
   region: string;
   vendorHourly: number;
   vramGb: number;
+  gpuCount: number;
   fetchedAt: string;
   score: number;
   scoreBreakdown: ScoreBreakdown;
@@ -65,6 +66,7 @@ interface RawCandidate {
   region: string;
   vendorHourly: number;
   vramGb: number;
+  gpuCount: number;
   gpuModel: string;
   fetchedAt: string;
 }
@@ -86,6 +88,7 @@ export function filterAndScore(request: RankedQuoteRequest, providerStates: Cach
         region: fact.region,
         vendorHourly: fact.base_hourly_rate_usd,
         vramGb: fact.specs.gpu_memory_gb,
+        gpuCount: fact.specs.gpu_count,
         gpuModel: fact.specs.gpu_model,
         fetchedAt: fact.observed_at,
       });
@@ -131,6 +134,7 @@ export function filterAndScore(request: RankedQuoteRequest, providerStates: Cach
     region: c.region,
     vendorHourly: c.vendorHourly,
     vramGb: c.vramGb,
+    gpuCount: c.gpuCount,
     fetchedAt: c.fetchedAt,
     score: Math.round(c.score * 1000) / 1000,
     scoreBreakdown: {

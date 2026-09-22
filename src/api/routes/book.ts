@@ -40,12 +40,15 @@ const BookRequestBody = z.object({
  * POST /v1/route/book — re-runs the exact same server-side ranking as
  * POST /v1/route/rank (same filterAndScore call, same cache read),
  * then dispatches ONLY to whichever provider that ranking actually
- * recommends. lambda_labs dispatches for real (LambdaLabsBooker,
- * vendorBooker.ts) when LAMBDA_API_KEY is configured, falling back to
- * SimulatedLambdaLabsBooker otherwise (dev/no-key convenience — see
- * index.ts's wiring). A recommendation for any other provider returns
- * a real, honest "unsupported_provider" response rather than
- * fabricating dispatch.
+ * recommends. Real dispatch exists for two providers today: lambda_labs
+ * (LambdaLabsBooker when LAMBDA_API_KEY is configured, falling back to
+ * SimulatedLambdaLabsBooker otherwise — dev/no-key convenience) and
+ * runpod (RunPodBooker when RUNPOD_API_KEY is configured, no simulated
+ * fallback — unset means a runpod recommendation returns
+ * "unsupported_provider", not fake dispatch; see vendorBooker.ts /
+ * index.ts's wiring for both). A recommendation for any other provider
+ * returns that same real, honest "unsupported_provider" response
+ * rather than fabricating dispatch.
  *
  * Debit-after-success, not before: the vendor booker is called FIRST;
  * CreditLedger.charge() only runs once it returns ok:true. A vendor
@@ -98,6 +101,7 @@ export function registerBookRoute(app: FastifyInstance, deps: BookRouteDeps): vo
       region: recommended.region,
       hours,
       vendorHourly: recommended.vendorHourly,
+      gpuCount: recommended.gpuCount,
     });
 
     if (!bookingResult.ok) {

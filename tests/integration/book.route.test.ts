@@ -151,4 +151,23 @@ describe("POST /v1/route/book — no_match / unsupported_provider do not debit",
     expect(body.provider).toBe("coreweave");
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore, 5);
   });
+
+  it("dispatches to the correct registered booker when rank recommends a second provider (RunPod, not just Lambda)", async () => {
+    built = await buildTestApp();
+    built.runpodBooker.setShouldSucceed(true);
+    // US-TX-1/US-CA-2/US-NJ-1 are only in RunPod's fixture — forces a runpod recommendation.
+    const res = await built.app.inject({
+      method: "POST",
+      url: "/v1/route/book",
+      headers: { authorization: `Bearer ${built.apiKey}` },
+      payload: { region: "US-TX-1", hours: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.vendor).toBe("runpod");
+    // Proves the RIGHT booker was called, not just any/the first one.
+    expect(built.runpodBooker.lastParams).toBeDefined();
+    expect(built.lambdaLabsBooker.lastParams).toBeUndefined();
+  });
 });

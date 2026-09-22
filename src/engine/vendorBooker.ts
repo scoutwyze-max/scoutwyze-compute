@@ -5,6 +5,7 @@ export interface BookingParams {
   region: string;
   hours: number;
   vendorHourly: number;
+  gpuCount: number;
 }
 
 export type BookingResult =
@@ -126,6 +127,66 @@ export class LambdaLabsBooker implements VendorBooker {
       ok: true,
       jobId: instanceId,
       connectInfo: { instanceId, region: params.region, instanceType: params.sku },
+    };
+  }
+}
+
+/**
+ * Real RunPod dispatch — POST https://api.runpod.io/v2/pods, verified
+ * directly against RunPod's own docs (2026-09), not from memory. V1
+ * (rest.runpod.io/v1/pods) is deprecated (retiring 2026-11-15) —
+ * deliberately built against v2 from the start rather than something
+ * already scheduled to break.
+ *
+ * `image`/`diskGb` are real product decisions (what container image a
+ * customer's pod boots with, how much local disk it gets) that don't
+ * have an answer anywhere else in this codebase — documented defaults,
+ * overridable via env, not values to silently bake in as if they were
+ * considered business decisions.
+ */
+export class RunPodBooker implements VendorBooker {
+  readonly providerId = "runpod" as const;
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly image: string,
+    private readonly diskGb: number,
+  ) {}
+
+  async book(params: BookingParams): Promise<BookingResult> {
+    let res: Response;
+    try {
+      res = await fetch("https://api.runpod.io/v2/pods", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: `scoutwyze-${Date.now()}`,
+          gpu: { id: params.sku, count: params.gpuCount },
+          image: this.image,
+          dataCenterIds: [params.region],
+          disk: this.diskGb,
+        }),
+      });
+    } catch (err) {
+      return { ok: false, reason: `RunPod API request failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    const body = (await res.json().catch(() => null)) as { id?: string; status?: string; error?: string; message?: string } | null;
+
+    if (!res.ok) {
+      return { ok: false, reason: body?.error ?? body?.message ?? `RunPod API returned HTTP ${res.status}` };
+    }
+    if (!body?.id) {
+      return { ok: false, reason: "RunPod API returned success but no pod id in the response" };
+    }
+
+    return {
+      ok: true,
+      jobId: body.id,
+      connectInfo: { podId: body.id, status: body.status, region: params.region, gpu: params.sku, gpuCount: params.gpuCount },
     };
   }
 }
