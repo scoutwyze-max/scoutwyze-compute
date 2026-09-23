@@ -96,7 +96,7 @@ describe("filterAndScore — scoring and ranking", () => {
       fact({ provider: "lambda_labs", instance_type: "cheap-stale", base_hourly_rate_usd: 5, observed_at: new Date(now - 55 * 60_000).toISOString() }),
       fact({ provider: "runpod", instance_type: "pricey-fresh", base_hourly_rate_usd: 40, observed_at: new Date(now).toISOString() }),
     ];
-    const result = filterAndScore({ preference: "fastest" }, [stateWith(facts)], now);
+    const result = filterAndScore({ preference: "fastest" }, [stateWith(facts)], { now });
     expect(result.status).toBe("ok");
     if (result.status === "ok") expect(result.ranked[0]?.sku).toBe("pricey-fresh");
   });
@@ -108,7 +108,7 @@ describe("filterAndScore — scoring and ranking", () => {
       fact({ provider: "lambda_labs", instance_type: "stale", base_hourly_rate_usd: 10, observed_at: new Date(now - 50 * 60_000).toISOString() }),
       fact({ provider: "runpod", instance_type: "fresh", base_hourly_rate_usd: 10, observed_at: new Date(now).toISOString() }),
     ];
-    const result = filterAndScore({ preference: "balanced" }, [stateWith(facts)], now);
+    const result = filterAndScore({ preference: "balanced" }, [stateWith(facts)], { now });
     expect(result.status).toBe("ok");
     if (result.status === "ok") expect(result.ranked[0]?.sku).toBe("fresh");
   });
@@ -119,7 +119,7 @@ describe("filterAndScore — scoring and ranking", () => {
       fact({ provider: "lambda_labs", instance_type: "a", base_hourly_rate_usd: 10, observed_at: new Date(now).toISOString() }),
       fact({ provider: "runpod", instance_type: "b", base_hourly_rate_usd: 10, observed_at: new Date(now).toISOString() }),
     ];
-    const result = filterAndScore({ preference: "cheapest" }, [stateWith(facts)], now);
+    const result = filterAndScore({ preference: "cheapest" }, [stateWith(facts)], { now });
     expect(result.status).toBe("ok");
     if (result.status === "ok") expect(result.ranked).toHaveLength(2);
   });
@@ -194,5 +194,32 @@ describe("filterAndScore — against the real fixture-shaped data", () => {
       expect(result.ranked[0]?.vendorHourly).toBe(11.8);
       expect(result.ranked[0]?.provider).toBe("lambda_labs");
     }
+  });
+});
+
+describe("filterAndScore — allowedProviders (real gap closed 2026-09-22: production is RunPod-only)", () => {
+  it("excludes a cheaper provider's facts entirely when it's not in allowedProviders — it can never win, not even as an alternative", () => {
+    const facts = [
+      fact({ provider: "lambda_labs", instance_type: "cheap-unbookable", base_hourly_rate_usd: 1 }),
+      fact({ provider: "runpod", instance_type: "pricier-bookable", base_hourly_rate_usd: 50 }),
+    ];
+    const result = filterAndScore({ preference: "cheapest" }, [stateWith(facts)], { allowedProviders: ["runpod"] });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.ranked).toHaveLength(1);
+      expect(result.ranked[0]?.provider).toBe("runpod");
+    }
+  });
+
+  it("returns no_inventory (not no_match) when every fact in the cache belongs to a disallowed provider", () => {
+    const result = filterAndScore({ preference: "cheapest" }, [stateWith([fact({ provider: "lambda_labs" })])], { allowedProviders: ["runpod"] });
+    expect(result.status).toBe("no_inventory");
+  });
+
+  it("omitting allowedProviders entirely applies no restriction (back-compat with every other test in this file)", () => {
+    const facts = [fact({ provider: "lambda_labs" }), fact({ provider: "coreweave" })];
+    const result = filterAndScore({ preference: "cheapest" }, [stateWith(facts)]);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") expect(result.ranked).toHaveLength(2);
   });
 });

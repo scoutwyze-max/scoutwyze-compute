@@ -6,7 +6,12 @@ import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
 import { registerRankRoute } from "./api/routes/rank.js";
 import { registerBookRoute } from "./api/routes/book.js";
-import { SimulatedLambdaLabsBooker, LambdaLabsBooker, RunPodBooker, type VendorBooker } from "./engine/vendorBooker.js";
+// LambdaLabsBooker/SimulatedLambdaLabsBooker deliberately NOT imported
+// here — production is RunPod-only (Robert, 2026-09-22: Lambda's
+// account-side auth issue was never resolved and isn't worth more
+// time). The Lambda classes still exist in vendorBooker.ts, unused
+// and uncalled, not deleted.
+import { RunPodBooker, type VendorBooker } from "./engine/vendorBooker.js";
 import { registerAdminRoutes } from "./api/routes/admin.js";
 import { registerStripeWebhookRoute } from "./api/routes/stripeWebhook.js";
 import { registerSignupRoute } from "./api/routes/signup.js";
@@ -59,12 +64,6 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ?? "";
 // Stripe's own API, caught live while verifying this exact config).
 const CHECKOUT_SUCCESS_URL = process.env.CHECKOUT_SUCCESS_URL || "https://example.com/checkout/success";
 const CHECKOUT_CANCEL_URL = process.env.CHECKOUT_CANCEL_URL || "https://example.com/checkout/cancel";
-// Real Lambda Cloud dispatch (src/engine/vendorBooker.ts) when set;
-// falls back to the simulated booker otherwise — same "insecure/no-op
-// default with a loud warning" posture as the other optional secrets
-// in this file, not a silent swap.
-const LAMBDA_API_KEY = process.env.LAMBDA_API_KEY;
-const LAMBDA_SSH_KEY_NAME = process.env.LAMBDA_SSH_KEY_NAME;
 // Real RunPod dispatch when set — no simulated fallback for RunPod
 // specifically (unlike Lambda): if RUNPOD_API_KEY is configured,
 // RunPod bookings go through the real RunPodBooker or not at all;
@@ -120,23 +119,22 @@ async function main() {
     quoteTtlSeconds: QUOTE_TTL_SECONDS,
     routePriceUsdc: ROUTE_PRICE_USDC,
   });
-  registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: ROUTE_PRICE_USDC });
-  if (LAMBDA_API_KEY) {
-    if (!LAMBDA_SSH_KEY_NAME) {
-      logger.warn("LAMBDA_API_KEY is set but LAMBDA_SSH_KEY_NAME is not — every real Lambda booking will fail closed until an existing SSH key name is configured.");
-    }
-    logger.info("Lambda Labs dispatch: REAL (LAMBDA_API_KEY configured)");
-  } else {
-    logger.warn("LAMBDA_API_KEY not set — Lambda Labs dispatch is SIMULATED, no real instance will ever be provisioned.");
-  }
-  const lambdaBooker = LAMBDA_API_KEY ? new LambdaLabsBooker(LAMBDA_API_KEY, LAMBDA_SSH_KEY_NAME) : new SimulatedLambdaLabsBooker();
-  const bookers: VendorBooker[] = [lambdaBooker];
+  // Production is RunPod-only (Robert, 2026-09-22): lambda_labs is
+  // deliberately never registered here, regardless of any leftover
+  // LAMBDA_API_KEY — its account-side auth issue was never resolved
+  // and isn't worth more time. bookableProviders (below) is derived
+  // from this SAME array, so rank and book can never recommend/dispatch
+  // to a provider that isn't actually registered here.
+  const bookers: VendorBooker[] = [];
   if (RUNPOD_API_KEY) {
     logger.info("RunPod dispatch: REAL (RUNPOD_API_KEY configured)");
     bookers.push(new RunPodBooker(RUNPOD_API_KEY, RUNPOD_IMAGE, RUNPOD_DISK_GB));
   } else {
-    logger.warn("RUNPOD_API_KEY not set — a rank recommending runpod will return unsupported_provider on /v1/route/book.");
+    logger.warn("RUNPOD_API_KEY not set — rank/book have zero bookable providers until it's configured.");
   }
+  const bookableProviders = bookers.map((b) => b.providerId);
+
+  registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: ROUTE_PRICE_USDC, bookableProviders });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
 
   if (!ADMIN_SECRET) {
@@ -178,7 +176,10 @@ async function main() {
     checkoutSuccessUrl: CHECKOUT_SUCCESS_URL,
     checkoutCancelUrl: CHECKOUT_CANCEL_URL,
   });
-  registerPublicSignupPage(app, { lambdaDispatchIsReal: !!LAMBDA_API_KEY, runpodDispatchIsReal: !!RUNPOD_API_KEY });
+  // lambdaDispatchIsReal hardcoded false — Lambda is never registered
+  // as a booker in production (see bookers above), so it's never
+  // "live" regardless of any leftover key.
+  registerPublicSignupPage(app, { lambdaDispatchIsReal: false, runpodDispatchIsReal: !!RUNPOD_API_KEY });
 
   app.get("/healthz", async () => ({
     status: "ok",

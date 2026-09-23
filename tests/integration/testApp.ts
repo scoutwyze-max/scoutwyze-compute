@@ -17,6 +17,7 @@ import { ProcessedEventStore } from "../../src/payments/processedEvents.js";
 import { FakeChainReader } from "../helpers/fakeChainReader.js";
 import { FakeCheckoutSessionCreator } from "../helpers/fakeCheckoutSessionCreator.js";
 import { FakeVendorBooker } from "../helpers/fakeVendorBooker.js";
+import type { ProviderId } from "../../src/types/schema.js";
 
 const TEST_CACHE_TTL_SECONDS = 300; // generous — tests here aren't exercising TTL behavior itself
 const TEST_ACCOUNT_ID = "test-account";
@@ -44,7 +45,16 @@ export interface TestApp {
   runpodBooker: FakeVendorBooker;
 }
 
-export async function buildTestApp(): Promise<TestApp> {
+export interface BuildTestAppOptions {
+  // Defaults to ["runpod"] — mirrors index.ts's real production
+  // wiring (RunPod-only, 2026-09-22: Lambda is left in the repo but
+  // never registered as a booker). Tests that specifically want to
+  // exercise the generic multi-booker dispatch mechanism itself (not
+  // the production policy) can opt in with e.g. ["lambda_labs", "runpod"].
+  bookableProviders?: ProviderId[];
+}
+
+export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<TestApp> {
   const app = Fastify({ logger: false });
   const cache = new IngestionCache(PROVIDER_ADAPTERS, TEST_CACHE_TTL_SECONDS);
   await cache.ingestAll();
@@ -81,10 +91,15 @@ export async function buildTestApp(): Promise<TestApp> {
     checkoutCancelUrl: "https://example.com/cancel",
   });
   registerPublicSignupPage(app, { lambdaDispatchIsReal: false, runpodDispatchIsReal: false });
-  registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: 0.15 });
+
   const lambdaLabsBooker = new FakeVendorBooker("lambda_labs");
   const runpodBooker = new FakeVendorBooker("runpod");
-  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers: [lambdaLabsBooker, runpodBooker] });
+  const fakeBookersByProvider: Record<string, FakeVendorBooker> = { lambda_labs: lambdaLabsBooker, runpod: runpodBooker };
+  const bookableProviders = options.bookableProviders ?? ["runpod"];
+  const bookers = bookableProviders.map((id) => fakeBookersByProvider[id]!);
+
+  registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: 0.15, bookableProviders });
+  registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
 
   app.addHook("onClose", async () => {
     db.close();

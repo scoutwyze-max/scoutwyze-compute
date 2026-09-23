@@ -64,8 +64,8 @@ describe("POST /v1/route/book — auth", () => {
 
 describe("POST /v1/route/book — successful booking debits after vendor acceptance", () => {
   it("200s with vendor/jobId/connectInfo/quotedPrice/creditsRemaining, and debits the marked-up quotedPrice (not raw vendor cost)", async () => {
-    built = await buildTestApp();
-    built.lambdaLabsBooker.setShouldSucceed(true);
+    built = await buildTestApp(); // default: RunPod-only, mirrors production
+    built.runpodBooker.setShouldSucceed(true);
     const balanceBefore = built.creditLedger.getBalance(built.accountId);
 
     const res = await built.app.inject({
@@ -78,7 +78,9 @@ describe("POST /v1/route/book — successful booking debits after vendor accepta
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.status).toBe("ok");
-    expect(body.vendor).toBe("lambda_labs");
+    // Production is RunPod-only: even though Lambda's fixture has a
+    // cheaper H100 row, it must never be recommended or dispatched to.
+    expect(body.vendor).toBe("runpod");
     expect(body.jobId).toBeTruthy();
     expect(body.connectInfo).toBeTruthy();
     expect(body.quotedPrice).toBeGreaterThan(0);
@@ -87,20 +89,24 @@ describe("POST /v1/route/book — successful booking debits after vendor accepta
     // caught the old zero-margin pass-through bug directly.
     expect(body.quotedPrice).toBeGreaterThan(body.vendorCost);
     expect(body.margin).toBeGreaterThan(0);
-    expect(body.quotedPrice).toBeCloseTo(body.vendorCost * (1 + body.margin), 5);
+    // precision 2 (cents), not 5 — quotedPrice is itself rounded to
+    // cents in book.ts, so comparing against the raw unrounded product
+    // can differ by up to half a cent depending on the exact numbers.
+    expect(body.quotedPrice).toBeCloseTo(body.vendorCost * (1 + body.margin), 2);
     expect(body.creditsRemaining).toBeCloseTo(balanceBefore - body.quotedPrice, 5);
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore - body.quotedPrice, 5);
 
     // The booker really was called with the server-computed candidate,
-    // not anything client-supplied.
-    expect(built.lambdaLabsBooker.lastParams?.hours).toBe(2);
+    // not anything client-supplied. Lambda's booker is never touched.
+    expect(built.runpodBooker.lastParams?.hours).toBe(2);
+    expect(built.lambdaLabsBooker.lastParams).toBeUndefined();
   });
 });
 
 describe("POST /v1/route/book — vendor failure means no debit", () => {
   it("returns vendor_declined and does not touch the balance", async () => {
     built = await buildTestApp();
-    built.lambdaLabsBooker.setShouldSucceed(false, "capacity exhausted");
+    built.runpodBooker.setShouldSucceed(false, "capacity exhausted");
     const balanceBefore = built.creditLedger.getBalance(built.accountId);
 
     const res = await built.app.inject({
@@ -133,12 +139,20 @@ describe("POST /v1/route/book — no_match / unsupported_provider do not debit",
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore, 5);
   });
 
-  it("returns unsupported_provider (not a crash or fake dispatch) when the recommended provider has no registered booker", async () => {
-    built = await buildTestApp();
+  it("returns no_match (not a fake/broken dispatch) for a region that only a non-bookable provider's fixture has", async () => {
+    built = await buildTestApp(); // default: RunPod-only
     const balanceBefore = built.creditLedger.getBalance(built.accountId);
-    // Force a non-lambda_labs recommendation: filter to a region only
-    // CoreWeave's fixture has, with a price ceiling that excludes it
-    // from being outcompeted — region="US-LAS1" only matches CoreWeave's fixture.
+    // region="US-LAS1" only matches CoreWeave's fixture. Since production
+    // (2026-09-22, Robert: "Production path is RunPod only... do not
+    // recommend a provider we will 401/unsupported") filters ranking
+    // itself to bookableProviders BEFORE scoring, CoreWeave's row is
+    // invisible here — the result is no_match, not a doomed
+    // "recommended coreweave, then failed to dispatch" round trip. This
+    // also means the "unsupported_provider" response is no longer
+    // reachable through this route in normal operation (bookersByProvider
+    // and the ranking filter are now built from the same deps.bookers
+    // list, see book.ts) — it stays in the code only as a defensive
+    // fallback against the two ever drifting apart.
     const res = await built.app.inject({
       method: "POST",
       url: "/v1/route/book",
@@ -146,14 +160,16 @@ describe("POST /v1/route/book — no_match / unsupported_provider do not debit",
       payload: { region: "US-LAS1", hours: 1 },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.status).toBe("unsupported_provider");
-    expect(body.provider).toBe("coreweave");
+    expect(res.json()).toEqual({ status: "no_match" });
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore, 5);
   });
 
-  it("dispatches to the correct registered booker when rank recommends a second provider (RunPod, not just Lambda)", async () => {
-    built = await buildTestApp();
+  it("dispatches to the correct registered booker when multiple bookers are configured (generic mechanism, not the production policy)", async () => {
+    // Opts into a non-default, multi-booker scenario to prove book.ts's
+    // dispatch-routing mechanism itself still picks whichever booker
+    // rank actually recommends, not just the first one registered —
+    // production (buildTestApp() with no args) only ever registers one.
+    built = await buildTestApp({ bookableProviders: ["lambda_labs", "runpod"] });
     built.runpodBooker.setShouldSucceed(true);
     // US-MO-1/US-CA-2/US-GA-2/US-NE-1 are only in RunPod's fixture — forces a runpod recommendation.
     const res = await built.app.inject({

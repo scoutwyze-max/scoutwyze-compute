@@ -111,3 +111,24 @@ describe("POST /v1/route/rank — real match debits exactly once and returns the
     expect(res.json().status).toBe("ok");
   });
 });
+
+describe("POST /v1/route/rank — production is RunPod-only (Robert, 2026-09-22)", () => {
+  it("never recommends Lambda even though Lambda's fixture has a cheaper H100 row than RunPod's", async () => {
+    built = await buildTestApp(); // default: RunPod-only, mirrors production
+    const res = await built.app.inject({
+      method: "POST",
+      url: "/v1/route/rank",
+      headers: { authorization: `Bearer ${built.apiKey}` },
+      payload: { gpuClass: "H100", preference: "cheapest" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.recommended.provider).toBe("runpod");
+    // Not just "recommended" — a provider we can't book should never
+    // appear anywhere in the response, including as a mere alternative.
+    for (const candidate of body.alternatives) {
+      expect(candidate.provider).toBe("runpod");
+    }
+  });
+});

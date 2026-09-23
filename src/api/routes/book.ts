@@ -38,17 +38,23 @@ const BookRequestBody = z.object({
 
 /**
  * POST /v1/route/book — re-runs the exact same server-side ranking as
- * POST /v1/route/rank (same filterAndScore call, same cache read),
- * then dispatches ONLY to whichever provider that ranking actually
- * recommends. Real dispatch exists for two providers today: lambda_labs
- * (LambdaLabsBooker when LAMBDA_API_KEY is configured, falling back to
- * SimulatedLambdaLabsBooker otherwise — dev/no-key convenience) and
- * runpod (RunPodBooker when RUNPOD_API_KEY is configured, no simulated
- * fallback — unset means a runpod recommendation returns
- * "unsupported_provider", not fake dispatch; see vendorBooker.ts /
- * index.ts's wiring for both). A recommendation for any other provider
- * returns that same real, honest "unsupported_provider" response
- * rather than fabricating dispatch.
+ * POST /v1/route/rank, restricted to exactly the providers in
+ * deps.bookers (the ranking pass can never recommend, and therefore
+ * can never try to dispatch to, a provider with no registered
+ * booker) — then dispatches to whichever provider that restricted
+ * ranking recommends.
+ *
+ * Production is RunPod-only by deliberate choice (Robert, 2026-09-22):
+ * index.ts registers only RunPodBooker in deps.bookers. LambdaLabsBooker
+ * / SimulatedLambdaLabsBooker still exist in vendorBooker.ts but are
+ * never instantiated or registered there — left in the repo, unused
+ * and uncalled, not deleted, in case Lambda's account-side auth issue
+ * (see docs/SOT or prior handoff — never resolved, not worth more time
+ * per Robert) gets fixed later. The "unsupported_provider" response
+ * below is now effectively unreachable in normal operation (ranking
+ * and dispatch draw from the same deps.bookers list by construction)
+ * but stays as a defensive fallback, not dead code removed outright —
+ * cheap insurance against deps.bookers/ranking ever drifting apart.
  *
  * Debit-after-success, not before: the vendor booker is called FIRST;
  * CreditLedger.charge() only runs once it returns ok:true. A vendor
@@ -62,6 +68,7 @@ const BookRequestBody = z.object({
  */
 export function registerBookRoute(app: FastifyInstance, deps: BookRouteDeps): void {
   const bookersByProvider = new Map<ProviderId, VendorBooker>(deps.bookers.map((b) => [b.providerId, b]));
+  const bookableProviders = deps.bookers.map((b) => b.providerId);
   const margin = deps.bookingMargin ?? DEFAULT_BOOKING_MARGIN;
 
   app.post("/v1/route/book", async (request, reply) => {
@@ -85,7 +92,7 @@ export function registerBookRoute(app: FastifyInstance, deps: BookRouteDeps): vo
     }
 
     const { hours, ...rankRequest } = parsedBody.data;
-    const result = filterAndScore(rankRequest, deps.cache.getStates());
+    const result = filterAndScore(rankRequest, deps.cache.getStates(), { allowedProviders: bookableProviders });
 
     if (result.status === "no_inventory") return reply.code(200).send({ status: "no_inventory" });
     if (result.status === "no_match") return reply.code(200).send({ status: "no_match" });

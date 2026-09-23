@@ -5,12 +5,20 @@ import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
 import { computeRequestHash, DEFAULT_ROUTE_PRICE_USDC } from "../middleware/x402.js";
 import { filterAndScore, type RankedCandidate } from "../../engine/rankedScoring.js";
+import type { ProviderId } from "../../types/schema.js";
 
 export interface RankRouteDeps {
   cache: IngestionCache;
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
   routePriceUsdc?: number;
+  // Real gap closed 2026-09-22 (Robert: "Production path is RunPod
+  // only... do not recommend a provider we will 401/unsupported") —
+  // required, not optional, so a route can't accidentally recommend a
+  // provider nothing can actually book. index.ts derives this from the
+  // same registered-bookers list POST /v1/route/book uses, so the two
+  // routes can't drift out of sync with each other.
+  bookableProviders: ProviderId[];
 }
 
 const RankRequestBody = z.object({
@@ -62,7 +70,7 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
       return reply.code(402).send({ error: "insufficient_credits", message: "Zero balance.", balanceUsd: 0 });
     }
 
-    const result = filterAndScore(parsedBody.data, deps.cache.getStates());
+    const result = filterAndScore(parsedBody.data, deps.cache.getStates(), { allowedProviders: deps.bookableProviders });
 
     if (result.status === "no_inventory") {
       return reply.code(200).send({ status: "no_inventory" });

@@ -77,11 +77,31 @@ interface RawCandidate {
  * booking logic itself. Pure function: cache state + request in, a
  * ranked list (or a real "nothing to show" status) out. No I/O, no
  * billing, no dispatch — callers own auth/debit/booking around this.
+ *
+ * `allowedProviders`, when passed, restricts candidates to that set
+ * BEFORE filtering/scoring — real gap closed 2026-09-22 (Robert:
+ * "Production path is RunPod only... do not recommend a provider we
+ * will 401/unsupported"). A provider with no real booking capability
+ * (e.g. lambda_labs today — see index.ts's wiring) must never appear
+ * in recommended/alternatives, not just get rejected later at dispatch
+ * time. Omitted entirely = no restriction, still used as-is by
+ * rankedScoring's own unit tests to exercise multi-provider scoring.
  */
-export function filterAndScore(request: RankedQuoteRequest, providerStates: CachedProviderState[], now: number = Date.now()): RankedScoringResult {
+export function filterAndScore(
+  request: RankedQuoteRequest,
+  providerStates: CachedProviderState[],
+  options: { now?: number; allowedProviders?: ProviderId[] } = {},
+): RankedScoringResult {
+  const { now = Date.now(), allowedProviders } = options;
   const allFacts: RawCandidate[] = [];
   for (const state of providerStates) {
     for (const fact of state.facts) {
+      // Filtered per-fact, not per-state: real CachedProviderState
+      // grouping always has state.provider match every fact.provider
+      // within it (one adapter = one provider = one state), but
+      // filtering the fact's own field is strictly more correct and
+      // doesn't lean on that invariant holding.
+      if (allowedProviders && !allowedProviders.includes(fact.provider)) continue;
       allFacts.push({
         provider: fact.provider,
         sku: fact.instance_type,
