@@ -11,6 +11,8 @@ const mockFacts: ProviderObservedFacts = {
   base_hourly_rate_usd: 22.3,
   specs: { gpu_model: "H100_80GB_SXM", gpu_count: 8, gpu_memory_gb: 80, interconnect: "InfiniBand", vcpus: 192, ram_gb: 1500, local_storage_gb: 4000 },
   capacity_type: "on_demand",
+  source: "fixture",
+  availability_status: null,
   observed_at: new Date().toISOString(),
 };
 

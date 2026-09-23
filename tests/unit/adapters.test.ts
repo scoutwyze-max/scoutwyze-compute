@@ -79,11 +79,12 @@ describe("adapter factories honor an injected RawEntrySource (not just the defau
         networkFabric: "custom-fabric",
         spotPrice: null,
       },
-    ]));
+    ]), "fixture");
     const result = await adapter.fetch();
     expect(result.facts).toHaveLength(1);
     expect(result.facts[0]?.region).toBe("custom-dc");
     expect(result.facts[0]?.base_hourly_rate_usd).toBe(16);
+    expect(result.facts[0]?.source).toBe("fixture");
   });
 
   it("createCoreweaveAdapter normalizes entries from a custom source", async () => {
@@ -113,7 +114,7 @@ describe("adapter factories honor an injected RawEntrySource (not just the defau
         throw new Error("simulated live feed outage");
       },
     };
-    const adapter = createRunpodAdapter(failingSource);
+    const adapter = createRunpodAdapter(failingSource, "fixture");
     await expect(adapter.fetch()).rejects.toThrow(/simulated live feed outage/);
   });
 });

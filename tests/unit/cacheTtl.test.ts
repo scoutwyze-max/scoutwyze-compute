@@ -19,6 +19,8 @@ const mockFacts: ProviderObservedFacts = {
     local_storage_gb: 20000,
   },
   capacity_type: "reserved",
+  source: "fixture",
+  availability_status: null,
   observed_at: new Date(0).toISOString(), // overwritten per-test via fetchedAt below
 };
 
@@ -99,6 +101,8 @@ describe("IngestionCache — strict TTL enforcement (CLAUDE.md §2/§3)", () => 
       base_hourly_rate_usd: 27.12,
       specs: { gpu_model: "H100 80GB SXM5", gpu_count: 8, gpu_memory_gb: 80, interconnect: "InfiniBand", vcpus: 208, ram_gb: 1800, local_storage_gb: 24576 },
       capacity_type: "on_demand",
+      source: "fixture",
+      availability_status: null,
       observed_at: new Date().toISOString(),
     };
 

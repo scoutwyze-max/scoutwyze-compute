@@ -1,11 +1,15 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import { ethers } from "ethers";
-import { createIngestionCache } from "./ingestion/ingest.js";
+import { IngestionCache } from "./ingestion/cache.js";
+import { PROVIDER_ADAPTERS } from "./providers/registry.js";
+import { createRunpodAdapter, RunpodLiveCatalogSource } from "./providers/runpod.js";
 import { IngestionWorker } from "./ingestion/worker.js";
 import { registerQuoteRoute } from "./api/routes/quote.js";
 import { registerRankRoute } from "./api/routes/rank.js";
 import { registerBookRoute } from "./api/routes/book.js";
+import { registerSampleRoute } from "./api/routes/sample.js";
+import { registerDiscoveryRoutes } from "./api/routes/discovery.js";
 // LambdaLabsBooker/SimulatedLambdaLabsBooker deliberately NOT imported
 // here — production is RunPod-only (Robert, 2026-09-22: Lambda's
 // account-side auth issue was never resolved and isn't worth more
@@ -73,6 +77,18 @@ const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 // documented defaults, not considered business choices.
 const RUNPOD_IMAGE = process.env.RUNPOD_IMAGE || "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel";
 const RUNPOD_DISK_GB = Number(process.env.RUNPOD_DISK_GB ?? 50);
+// Used in landing-page/llms.txt curl examples only — never used for
+// anything security-sensitive (no redirect, no CORS origin check).
+const BASE_URL = process.env.BASE_URL || "https://scoutwyze-compute.fly.dev";
+// Real gap closed 2026-09-23 (Robert: "If /book is not end-to-end
+// tested this week: omit book from landing, llms.txt, and OpenAPI.
+// Leave the route deployed but unpublished."). As of this deploy, the
+// only live RunPod book attempt got vendor_declined (real capacity
+// response, not a bug — see vendorBooker.ts) — never a real ok:true
+// accept. /v1/route/book stays fully functional and deployed either
+// way; this only controls whether it's ADVERTISED. Flip to true the
+// day a real booking actually succeeds end to end.
+const BOOK_IS_PUBLISHED = false;
 
 async function main() {
   const app = Fastify({ logger: false });
@@ -100,7 +116,20 @@ async function main() {
   }
   const challengeStore = new ChallengeStore(db, BASE_TREASURY_ADDRESS);
 
-  const cache = createIngestionCache(CACHE_TTL_SECONDS);
+  // Real gap closed 2026-09-23 (Robert: "live" isn't allowed in public
+  // copy until rank actually sources RunPod from RunPod's own live
+  // catalog, not the fixture) — registry.ts/PROVIDER_ADAPTERS stays
+  // fixture-only for lambda_labs/coreweave (deliberate, they're
+  // comparison-only, never bookable) AND for runpod's own default
+  // export (tests must never depend on RUNPOD_API_KEY being set or
+  // absent — see runpodAdapter's own doc comment). Only here, in the
+  // real running app, does runpod's adapter swap to a live source.
+  const runpodApiKey = RUNPOD_API_KEY;
+  const runpodIsLive = !!runpodApiKey;
+  const adapters = runpodApiKey
+    ? PROVIDER_ADAPTERS.map((a) => (a.id === "runpod" ? createRunpodAdapter(new RunpodLiveCatalogSource(runpodApiKey), "live_api") : a))
+    : PROVIDER_ADAPTERS;
+  const cache = new IngestionCache(adapters, CACHE_TTL_SECONDS);
   const worker = new IngestionWorker(cache, INGESTION_REFRESH_INTERVAL_SECONDS);
 
   // CLAUDE.md §4 — populate the cache once at boot BEFORE serving any
@@ -136,6 +165,8 @@ async function main() {
 
   registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: ROUTE_PRICE_USDC, bookableProviders });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
+  registerSampleRoute(app, { cache, bookableProviders });
+  registerDiscoveryRoutes(app, { baseUrl: BASE_URL, runpodIsLive, bookIsPublished: BOOK_IS_PUBLISHED });
 
   if (!ADMIN_SECRET) {
     logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");
@@ -176,10 +207,7 @@ async function main() {
     checkoutSuccessUrl: CHECKOUT_SUCCESS_URL,
     checkoutCancelUrl: CHECKOUT_CANCEL_URL,
   });
-  // lambdaDispatchIsReal hardcoded false — Lambda is never registered
-  // as a booker in production (see bookers above), so it's never
-  // "live" regardless of any leftover key.
-  registerPublicSignupPage(app, { lambdaDispatchIsReal: false, runpodDispatchIsReal: !!RUNPOD_API_KEY });
+  registerPublicSignupPage(app, { baseUrl: BASE_URL, runpodIsLive, bookIsPublished: BOOK_IS_PUBLISHED });
 
   app.get("/healthz", async () => ({
     status: "ok",

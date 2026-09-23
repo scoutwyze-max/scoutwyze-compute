@@ -23,6 +23,8 @@ const validFacts = {
     local_storage_gb: 24576,
   },
   capacity_type: "on_demand",
+  source: "fixture",
+  availability_status: null,
   observed_at: "2026-09-19T00:00:00.000Z",
 };
 
@@ -58,6 +60,21 @@ describe("ProviderObservedFacts — schema-break rejections", () => {
   it("rejects a completely missing specs object outright", () => {
     const { specs, ...withoutSpecs } = validFacts;
     expect(ProviderObservedFacts.safeParse(withoutSpecs).success).toBe(false);
+  });
+
+  it("rejects an unknown source value — 'live' claims must come from the two real, named states, not an arbitrary string", () => {
+    expect(ProviderObservedFacts.safeParse({ ...validFacts, source: "scraped" }).success).toBe(false);
+  });
+
+  it("rejects a missing source entirely — provenance is required, not an optional afterthought", () => {
+    const { source, ...withoutSource } = validFacts;
+    expect(ProviderObservedFacts.safeParse(withoutSource).success).toBe(false);
+  });
+
+  it("accepts a null availability_status (the honest 'this provider doesn't report it' case) but rejects an unrecognized string", () => {
+    expect(ProviderObservedFacts.safeParse({ ...validFacts, availability_status: null }).success).toBe(true);
+    expect(ProviderObservedFacts.safeParse({ ...validFacts, availability_status: "low" }).success).toBe(true);
+    expect(ProviderObservedFacts.safeParse({ ...validFacts, availability_status: "sold_out" }).success).toBe(false);
   });
 });
 

@@ -10,6 +10,8 @@ function fact(overrides: Partial<ProviderObservedFacts> & { provider: ProviderOb
     base_hourly_rate_usd: 10,
     specs: { gpu_model: "H100 80GB SXM5", gpu_count: 8, gpu_memory_gb: 80, interconnect: "InfiniBand", vcpus: 200, ram_gb: 1800, local_storage_gb: 20000 },
     capacity_type: "on_demand",
+    source: "fixture",
+    availability_status: null,
     observed_at: new Date().toISOString(),
     ...overrides,
   };

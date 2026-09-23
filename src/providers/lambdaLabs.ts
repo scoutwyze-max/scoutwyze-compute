@@ -67,6 +67,11 @@ export function createLambdaLabsAdapter(source: RawEntrySource): ProviderAdapter
             local_storage_gb: e.specs.storage_gib,
           },
           capacity_type: e.capacity,
+          // Fixture-sourced by deliberate choice, not a gap to hide —
+          // production booking is RunPod-only (2026-09-22); Lambda's
+          // quote data stays fixture/comparison-only, never claimed live.
+          source: "fixture",
+          availability_status: null, // Lambda's fixture doesn't model a provider-reported availability tier
           observed_at: fetchedAt,
         };
 

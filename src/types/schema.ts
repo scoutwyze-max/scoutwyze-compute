@@ -15,6 +15,25 @@ export type ProviderId = z.infer<typeof ProviderId>;
 export const CapacityType = z.enum(["on_demand", "reserved", "spot"]);
 export type CapacityType = z.infer<typeof CapacityType>;
 
+// Real gap closed 2026-09-23 (Robert: rank must show WHERE a number
+// came from, not just claim "live"): a fact's own provenance is now
+// part of what a provider "observed," not an implicit assumption.
+// "fixture" is an honest label, not a euphemism for broken — Lambda
+// Labs/CoreWeave stay fixture-sourced by deliberate choice (production
+// is RunPod-only for booking; see book.ts), never silently upgraded to
+// look live.
+export const FactSource = z.enum(["live_api", "fixture"]);
+export type FactSource = z.infer<typeof FactSource>;
+
+// Provider-REPORTED availability, distinct from ScoutWyzeEstimatedReality's
+// own computed interruption_risk_category below — this is literally
+// what the vendor's feed says (RunPod's catalog API reports this per
+// GPU/data-center), never a ScoutWyze judgment call. null when a
+// provider's feed doesn't report this concept at all (e.g. today's
+// fixture-sourced Lambda/CoreWeave rows) — never guessed to fill the gap.
+export const ProviderReportedAvailability = z.enum(["low", "medium", "high", "none"]);
+export type ProviderReportedAvailability = z.infer<typeof ProviderReportedAvailability>;
+
 // ── Provider-observed facts ──────────────────────────────────────────
 // CLAUDE.md §3.1 — exactly what a provider's own feed states, unmodified.
 // Nothing in this shape is ever derived or estimated by ScoutWyze.
@@ -33,6 +52,8 @@ export const ProviderObservedFacts = z.object({
     local_storage_gb: z.number().nonnegative(),
   }),
   capacity_type: CapacityType,
+  source: FactSource,
+  availability_status: ProviderReportedAvailability.nullable(),
   observed_at: z.string().datetime(),
 });
 export type ProviderObservedFacts = z.infer<typeof ProviderObservedFacts>;

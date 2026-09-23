@@ -18,6 +18,8 @@ const facts: ProviderObservedFacts = {
     local_storage_gb: 20000,
   },
   capacity_type: "reserved",
+  source: "fixture",
+  availability_status: null,
   observed_at: new Date().toISOString(),
 };
 

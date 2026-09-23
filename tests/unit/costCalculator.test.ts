@@ -17,6 +17,8 @@ const baseFacts: ProviderObservedFacts = {
     local_storage_gb: 24576,
   },
   capacity_type: "on_demand",
+  source: "fixture",
+  availability_status: null,
   observed_at: "2026-09-19T00:00:00.000Z",
 };
 

@@ -9,6 +9,8 @@ import { registerSignupRoute } from "../../src/api/routes/signup.js";
 import { registerPublicSignupPage } from "../../src/api/routes/publicPage.js";
 import { registerRankRoute } from "../../src/api/routes/rank.js";
 import { registerBookRoute } from "../../src/api/routes/book.js";
+import { registerSampleRoute } from "../../src/api/routes/sample.js";
+import { registerDiscoveryRoutes } from "../../src/api/routes/discovery.js";
 import { createDatabase } from "../../src/db/connection.js";
 import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
@@ -52,6 +54,9 @@ export interface BuildTestAppOptions {
   // exercise the generic multi-booker dispatch mechanism itself (not
   // the production policy) can opt in with e.g. ["lambda_labs", "runpod"].
   bookableProviders?: ProviderId[];
+  // Defaults to false — mirrors index.ts's BOOK_IS_PUBLISHED default
+  // (no successful live RunPod booking yet, 2026-09-23).
+  bookIsPublished?: boolean;
 }
 
 export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<TestApp> {
@@ -90,16 +95,18 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
     checkoutSuccessUrl: "https://example.com/success",
     checkoutCancelUrl: "https://example.com/cancel",
   });
-  registerPublicSignupPage(app, { lambdaDispatchIsReal: false, runpodDispatchIsReal: false });
-
   const lambdaLabsBooker = new FakeVendorBooker("lambda_labs");
   const runpodBooker = new FakeVendorBooker("runpod");
   const fakeBookersByProvider: Record<string, FakeVendorBooker> = { lambda_labs: lambdaLabsBooker, runpod: runpodBooker };
   const bookableProviders = options.bookableProviders ?? ["runpod"];
   const bookers = bookableProviders.map((id) => fakeBookersByProvider[id]!);
+  const bookIsPublished = options.bookIsPublished ?? false;
 
+  registerPublicSignupPage(app, { baseUrl: "https://example.com", runpodIsLive: false, bookIsPublished });
   registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: 0.15, bookableProviders });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
+  registerSampleRoute(app, { cache, bookableProviders });
+  registerDiscoveryRoutes(app, { baseUrl: "https://example.com", runpodIsLive: false, bookIsPublished });
 
   app.addHook("onClose", async () => {
     db.close();

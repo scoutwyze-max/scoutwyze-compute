@@ -35,6 +35,8 @@ const mockFacts: ProviderObservedFacts = {
     local_storage_gb: 20000,
   },
   capacity_type: "on_demand",
+  source: "fixture",
+  availability_status: null,
   observed_at: new Date().toISOString(),
 };
 

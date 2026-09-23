@@ -61,6 +61,11 @@ export function createCoreweaveAdapter(source: RawEntrySource): ProviderAdapter 
             local_storage_gb: e.ephemeralStorageGiB ?? 0,
           },
           capacity_type: e.commitment,
+          // Fixture-sourced by deliberate choice, same reasoning as
+          // lambdaLabs.ts — production booking is RunPod-only, CoreWeave
+          // stays fixture/comparison-only, never claimed live.
+          source: "fixture",
+          availability_status: null,
           observed_at: fetchedAt,
         };
 

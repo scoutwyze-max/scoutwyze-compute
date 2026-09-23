@@ -1,5 +1,5 @@
 import type { CachedProviderState } from "../ingestion/cache.js";
-import type { ProviderId } from "../types/schema.js";
+import type { ProviderId, FactSource, ProviderReportedAvailability } from "../types/schema.js";
 
 export type Preference = "cheapest" | "fastest" | "balanced";
 
@@ -25,7 +25,14 @@ export interface RankedCandidate {
   vendorHourly: number;
   vramGb: number;
   gpuCount: number;
-  fetchedAt: string;
+  observed_at: string;
+  // Real gap closed 2026-09-23 (Robert: "live" isn't allowed in public
+  // copy until callers can SEE which rows are actually live) —
+  // freshness_seconds/source/availability_status make provenance part
+  // of the response itself, not a claim in a README.
+  freshness_seconds: number;
+  source: FactSource;
+  availability_status: ProviderReportedAvailability | null;
   score: number;
   scoreBreakdown: ScoreBreakdown;
   reason: string;
@@ -69,6 +76,8 @@ interface RawCandidate {
   gpuCount: number;
   gpuModel: string;
   fetchedAt: string;
+  source: FactSource;
+  availabilityStatus: ProviderReportedAvailability | null;
 }
 
 /**
@@ -111,6 +120,8 @@ export function filterAndScore(
         gpuCount: fact.specs.gpu_count,
         gpuModel: fact.specs.gpu_model,
         fetchedAt: fact.observed_at,
+        source: fact.source,
+        availabilityStatus: fact.availability_status,
       });
     }
   }
@@ -136,10 +147,15 @@ export function filterAndScore(
 
   const scored = filtered.map((c) => {
     const priceScore = 1 - (c.vendorHourly - minPrice) / (maxPrice - minPrice || 1);
-    const ageMinutes = Math.max(0, (now - new Date(c.fetchedAt).getTime()) / 60000);
+    const ageMs = Math.max(0, now - new Date(c.fetchedAt).getTime());
+    const ageMinutes = ageMs / 60000;
     const freshnessScore = 1 - Math.min(ageMinutes, 60) / 60;
     const score = priceScore * weights.price + freshnessScore * weights.freshness;
-    return { ...c, score, priceScore, freshnessScore, ageMinutes };
+    // Computed once from the same raw ageMs as ageMinutes above, so the
+    // public freshness_seconds field and the internal scoring math can
+    // never drift apart from independent rounding.
+    const ageSeconds = Math.round(ageMs / 1000);
+    return { ...c, score, priceScore, freshnessScore, ageMinutes, ageSeconds };
   });
 
   scored.sort((a, b) => {
@@ -155,7 +171,10 @@ export function filterAndScore(
     vendorHourly: c.vendorHourly,
     vramGb: c.vramGb,
     gpuCount: c.gpuCount,
-    fetchedAt: c.fetchedAt,
+    observed_at: c.fetchedAt,
+    freshness_seconds: c.ageSeconds,
+    source: c.source,
+    availability_status: c.availabilityStatus,
     score: Math.round(c.score * 1000) / 1000,
     scoreBreakdown: {
       priceScore: Math.round(c.priceScore * 1000) / 1000,

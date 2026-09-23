@@ -85,6 +85,14 @@ describe("POST /v1/route/rank — real match debits exactly once and returns the
     expect(body.creditsRemaining).toBeCloseTo(balanceBefore - 0.15, 5);
 
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore - 0.15, 5);
+
+    // Provenance fields (2026-09-23: "live" isn't allowed in copy until
+    // callers can SEE which rows are actually live) — must be present
+    // on every offer, not just a claim in a README.
+    expect(body.recommended.observed_at).toBeTruthy();
+    expect(typeof body.recommended.freshness_seconds).toBe("number");
+    expect(["live_api", "fixture"]).toContain(body.recommended.source);
+    expect(body.recommended.fetchedAt).toBeUndefined(); // renamed, not duplicated
   });
 
   it("400s on an invalid preference value, before auth or billing", async () => {
