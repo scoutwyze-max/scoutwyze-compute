@@ -44,7 +44,25 @@ actively-documented path (see `SOT.md`).
 
 ## Configuration
 
-Add to your MCP host's config (e.g. Claude Desktop's `mcp.json`):
+Once published (see "Publishing" below), add to your MCP host's config
+(e.g. Claude Desktop's `mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "scoutwyze-compute": {
+      "command": "npx",
+      "args": ["-y", "@scoutwyze/compute-mcp"],
+      "env": {
+        "SCOUTWYZE_API_KEY": "sw_live_..."
+      }
+    }
+  }
+}
+```
+
+Before it's published, or for local development, point at the built
+file directly instead:
 
 ```json
 {
@@ -76,11 +94,35 @@ npm run build   # -> dist/index.js
 npm run dev     # runs directly from src/ via tsx, no build step
 ```
 
-This package is `"private": true` and not published to npm — running
-it means pointing an MCP host at a local `dist/index.js` path, per the
-config above. Publishing it as an installable package (so it could be
-referenced by name instead of a local path) is a separate, deliberate
-decision this repo hasn't made yet.
+## Publishing
+
+`npm publish` from inside this directory (`prepublishOnly` runs the
+build automatically, so `dist/` is always fresh — never publish a
+stale build by hand-running `npm run build` first and trusting it's
+still current). Two things to confirm before running it for real,
+neither of which could be verified from here:
+
+- **The `@scoutwyze` npm org must exist and you must be a member of
+  it**, or the scoped name `@scoutwyze/compute-mcp` will fail to
+  publish. Neither the package name nor the org's existence could be
+  confirmed automatically — `npm view @scoutwyze/compute-mcp` and
+  `npm view scoutwyze-compute-mcp` both 404 (unclaimed), but that
+  doesn't distinguish "org exists, package doesn't" from "org doesn't
+  exist yet." Check/create it at npmjs.com first.
+- **License** — set to MIT in `package.json`/`LICENSE` as the default
+  for this kind of thin client wrapper (extremely common for MCP
+  servers, and this package contains no proprietary logic — it's just
+  an HTTP client). Change it if you want something else.
+
+`publishConfig.access: "public"` is already set, since a scoped
+package defaults to requiring a paid private-package plan otherwise.
+
+One more thing worth knowing if you touch the build: `tsc` does not
+preserve or set the executable bit on its output, so `dist/index.js`
+came out of a plain `npm run build` as `644` — not runnable via `bin`.
+Verified directly against a real `npm pack` tarball, not assumed. The
+`postbuild` script (`chmod +x dist/index.js`) fixes this on every
+build; don't remove it.
 
 ## Other rules this server follows, not just documents
 
