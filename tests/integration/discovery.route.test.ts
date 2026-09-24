@@ -39,7 +39,7 @@ describe("GET /openapi.json", () => {
     const res = await built.app.inject({ method: "GET", url: "/openapi.json" });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.openapi).toBe("3.0.3");
+    expect(body.openapi).toBe("3.1.0");
     expect(body.paths["/v1/compute/sample"]).toBeTruthy();
     expect(body.paths["/v1/compute/rank"]).toBeTruthy();
     expect(body.paths["/v1/route/quote"]).toBeTruthy();

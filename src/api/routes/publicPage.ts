@@ -93,13 +93,13 @@ function buildHtml(deps: PublicPageDeps): string {
   },
   "alternatives": [ ... ],
   "limits": { "not_reserved": true, "not_provisioned": true, "can_provision": false },
-  "billing": { "billable": true, "unit": "successful_rank", "price_usd": 0.15, "creditsRemaining": 9.85 }
+  "billing": { "billable": true, "unit": "successful_rank", "price_usd": 0.15, "rail": "bearer", "creditsRemaining": 9.85 }
 }</pre>
 
   <div class="coverage">${coverageLine}</div>
 
   <div class="coverage">
-    <div><strong>POST /v1/compute/rank</strong> — Bearer-only (no x402 on this route). $0.15/request, debited only on a real match.</div>
+    <div><strong>POST /v1/compute/rank</strong> — $0.15/request. Dual-rail: Bearer key (debited only on a real match) or x402/USDC on Base (settles on payment, before scoring — see <code>billing.rail</code> in the response). <a href="/llms.txt">llms.txt</a> has the full asymmetry explained.</div>
     ${bookSection}
   </div>
 

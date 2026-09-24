@@ -1,5 +1,39 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { buildTestApp, type TestApp } from "./testApp.js";
+import { createTestPayerWallet, signPaymentAuthorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
+import { encodeUsdcTransferLog, fakeSuccessfulReceipt } from "../helpers/fakeUsdcTransfer.js";
+
+let txCounter = 0;
+/** Same pattern as auth.middleware.test.ts's own fakeTxHash — real
+ * hash FORMAT, not a real on-chain transaction; FakeChainReader is
+ * what decides what it "returns". */
+function fakeTxHash(): string {
+  txCounter += 1;
+  return "0x" + txCounter.toString(16).padStart(64, "0");
+}
+
+/** Drives a real challenge -> payment -> paid-request cycle against
+ * /v1/route/rank for a given body — mirrors auth.middleware.test.ts's
+ * payAndQuote, adapted to rank's own envelope instead of quote's. */
+async function payAndRank(app: TestApp, body: Record<string, unknown> = {}) {
+  const challengeRes = await app.app.inject({ method: "POST", url: "/v1/route/rank", payload: body });
+  expect(challengeRes.statusCode).toBe(402);
+  const challenge = challengeRes.json().accepts[0];
+  // Real bug caught live 2026-09-24: resource used to be hardcoded to
+  // "/v1/route/quote" on every challenge regardless of which route
+  // issued it. Asserted on every payAndRank call, not just once, so it
+  // can't quietly regress in one code path and not another.
+  expect(challenge.resource).toBe("/v1/compute/rank");
+
+  const wallet = createTestPayerWallet();
+  const txHash = fakeTxHash();
+  const amountUsdc = Number(challenge.maxAmountRequired);
+  app.chainReader.setReceipt(txHash, fakeSuccessfulReceipt([encodeUsdcTransferLog(wallet.address, app.treasuryAddress, amountUsdc)]));
+  const signature = await signPaymentAuthorization(wallet, { nonce: challenge.nonce, amountUsdc, txHash });
+  const paymentHeader = encodeX402Payment({ nonce: challenge.nonce, amountUsdc, payerAddress: wallet.address, txHash, signature });
+
+  return app.app.inject({ method: "POST", url: "/v1/route/rank", headers: { "x-payment": paymentHeader }, payload: body });
+}
 
 let built: TestApp | undefined;
 
@@ -8,14 +42,17 @@ afterEach(async () => {
   built = undefined;
 });
 
-describe("POST /v1/route/rank — auth", () => {
-  it("401s on a missing Authorization header — not a 402 x402 challenge", async () => {
+describe("POST /v1/route/rank — auth (2026-09-24: dual-rail, x402 extended onto this route)", () => {
+  it("falls through to a real x402 challenge on a missing Authorization header — not a bare 401", async () => {
     built = await buildTestApp();
     const res = await built.app.inject({ method: "POST", url: "/v1/route/rank", payload: {} });
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(402);
+    const body = res.json();
+    expect(body.x402Version).toBe(1);
+    expect(body.accepts?.[0]?.nonce).toBeTruthy();
   });
 
-  it("401s on an unknown/revoked key", async () => {
+  it("falls through to a real x402 challenge on an unknown/revoked key — not a bare 401", async () => {
     built = await buildTestApp();
     const res = await built.app.inject({
       method: "POST",
@@ -23,7 +60,23 @@ describe("POST /v1/route/rank — auth", () => {
       headers: { authorization: "Bearer sw_live_not_a_real_key" },
       payload: {},
     });
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(402);
+    expect(res.json().x402Version).toBe(1);
+  });
+
+  it("a recognized key with zero balance hard-402s WITHOUT attempting x402 — matches quote.ts's own precedent", async () => {
+    built = await buildTestApp();
+    const { rawKey } = built.apiKeyStore.create("zero-balance-fallthrough-account");
+    const res = await built.app.inject({
+      method: "POST",
+      url: "/v1/route/rank",
+      headers: { authorization: `Bearer ${rawKey}` },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(402);
+    const body = res.json();
+    expect(body.error).toBe("insufficient_credits");
+    expect(body.x402Version).toBeUndefined(); // real insufficient_credits, not a payment challenge
   });
 
   it("402s on a real key with a literal zero balance, before any scoring happens", async () => {
@@ -60,9 +113,42 @@ describe("POST /v1/route/rank — no_match does not debit", () => {
     expect(res.json()).toEqual({
       status: "no_match",
       schema_version: "1.0",
-      billing: { billable: false, unit: "successful_rank", price_usd: 0.15 },
+      billing: { billable: false, unit: "successful_rank", price_usd: 0.15, rail: "bearer" },
     });
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore, 5);
+  });
+});
+
+describe("POST /v1/route/rank — x402 rail (2026-09-24)", () => {
+  it("real end-to-end x402 payment succeeds and settles BEFORE scoring, even on no_match", async () => {
+    built = await buildTestApp();
+    const res = await payAndRank(built, { gpuClass: "definitely-not-a-real-gpu-xyz" }); // deliberately unsatisfiable
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("no_match");
+    // The documented asymmetry: x402 already paid, even though there's
+    // no match and nothing to show for it — unlike the Bearer rail
+    // above, which never charges in this exact situation.
+    expect(body.billing).toEqual({
+      billable: true,
+      unit: "successful_rank",
+      price_usd: 0.15,
+      rail: "x402",
+      note: expect.stringContaining("no refund path"),
+    });
+  });
+
+  it("a real x402 payment with a real match returns the full envelope, no creditsRemaining (no ledger on this rail)", async () => {
+    built = await buildTestApp();
+    const res = await payAndRank(built, { gpuClass: "H100" });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.recommended.provider).toBeTruthy();
+    expect(body.billing).toEqual({ billable: true, unit: "successful_rank", price_usd: 0.15, rail: "x402" });
+    expect(body.billing.creditsRemaining).toBeUndefined();
   });
 });
 
@@ -109,7 +195,7 @@ describe("POST /v1/route/rank — real match debits exactly once and returns the
     expect(body.schema_version).toBe("1.0");
     expect(body.coverage).toEqual({ vertical: "gpu_compute", providers_live: expect.any(Array) });
     expect(body.limits).toEqual({ not_reserved: true, not_provisioned: true, can_provision: false });
-    expect(body.billing).toMatchObject({ billable: true, unit: "successful_rank", price_usd: 0.15 });
+    expect(body.billing).toMatchObject({ billable: true, unit: "successful_rank", price_usd: 0.15, rail: "bearer" });
 
     // Provenance fields (2026-09-23: "live" isn't allowed in copy until
     // callers can SEE which rows are actually live) — must be present

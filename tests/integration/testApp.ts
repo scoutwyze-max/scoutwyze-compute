@@ -118,7 +118,18 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
   const bookIsPublished = options.bookIsPublished ?? false;
 
   registerPublicSignupPage(app, { baseUrl: "https://example.com", runpodIsLive: false, bookIsPublished });
-  registerRankRoute(app, { cache, apiKeyStore, creditLedger, requestLog, routePriceUsdc: 0.15, bookableProviders });
+  registerRankRoute(app, {
+    cache,
+    apiKeyStore,
+    creditLedger,
+    requestLog,
+    challengeStore,
+    processedEvents,
+    chainReader,
+    treasuryAddress: TEST_TREASURY_ADDRESS,
+    routePriceUsdc: 0.15,
+    bookableProviders,
+  });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
   registerSampleRoute(app, { cache, bookableProviders, requestLog });
   registerDiscoveryRoutes(app, { baseUrl: "https://example.com", runpodIsLive: false, bookIsPublished });

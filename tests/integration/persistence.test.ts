@@ -87,7 +87,7 @@ describe("SQLite persistence — survives closing and reopening the connection",
     const now = Date.now();
 
     const firstConnection = createDatabase(dbPath);
-    const { nonce } = new ChallengeStore(firstConnection, TEST_TREASURY_ADDRESS).issue(0.15, now);
+    const { nonce } = new ChallengeStore(firstConnection, TEST_TREASURY_ADDRESS).issue(0.15, now, "/v1/route/quote");
     firstConnection.close(); // client is mid-flow when the process restarts
 
     const secondConnection = createDatabase(dbPath);

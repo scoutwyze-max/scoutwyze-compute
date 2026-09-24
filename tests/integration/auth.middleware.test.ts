@@ -125,6 +125,11 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     expect(challenge.nonce).toBeTruthy();
     expect(challenge.payTo).toBe(built.treasuryAddress);
     expect(Number(challenge.maxAmountRequired)).toBeGreaterThanOrEqual(0.1);
+    // Real bug caught live 2026-09-24 while extending x402 onto
+    // compute/rank: resource used to be hardcoded regardless of which
+    // route issued the challenge. Asserted here on quote's side too,
+    // so a future regression can't silently break either route.
+    expect(challenge.resource).toBe("/v1/route/quote");
   });
 
   it("a payment with a real signature and a real on-chain-confirmed USDC transfer succeeds and returns a signed receipt header", async () => {

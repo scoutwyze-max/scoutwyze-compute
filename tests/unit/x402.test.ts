@@ -20,7 +20,7 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
 
   it("issues a well-formed challenge with a real nonce", () => {
     const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const challenge = store.issue(0.15, Date.now());
+    const challenge = store.issue(0.15, Date.now(), "/v1/route/quote");
     expect(challenge.nonce).toBeTruthy();
     expect(challenge.scheme).toBe("exact");
     expect(challenge.network).toBe("base");
@@ -28,10 +28,23 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
     expect(challenge.payTo).toBe(TEST_TREASURY_ADDRESS);
   });
 
+  it("resource reflects the real caller-supplied path, not a hardcoded one — real bug caught live 2026-09-24", () => {
+    // Previously hardcoded to "/v1/route/quote" regardless of which
+    // route actually issued the challenge — caught by manually testing
+    // a compute/rank 402 response and noticing it claimed to be for
+    // quote. No test existed asserting this field's VALUE, only that
+    // it was present as a string; this is that missing assertion.
+    const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
+    const rankChallenge = store.issue(0.15, Date.now(), "/v1/compute/rank");
+    expect(rankChallenge.resource).toBe("/v1/compute/rank");
+    const quoteChallenge = store.issue(0.15, Date.now(), "/v1/route/quote");
+    expect(quoteChallenge.resource).toBe("/v1/route/quote");
+  });
+
   it("consumes a fresh, valid nonce exactly once", () => {
     const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
     const now = Date.now();
-    const { nonce } = store.issue(0.15, now);
+    const { nonce } = store.issue(0.15, now, "/v1/route/quote");
 
     expect(store.consume(nonce, 0.15, now)).toEqual({ ok: true });
     expect(store.consume(nonce, 0.15, now)).toEqual({
@@ -49,7 +62,7 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
   it("rejects an amount below what the challenge required", () => {
     const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
     const now = Date.now();
-    const { nonce } = store.issue(0.2, now);
+    const { nonce } = store.issue(0.2, now, "/v1/route/quote");
     const result = store.consume(nonce, 0.1, now);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/below the required \$0\.2/);
@@ -58,7 +71,7 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
   it("CLAUDE.md §3 'times out' — a nonce submitted after CHALLENGE_TTL_SECONDS is rejected, not silently honored", () => {
     const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
     const issuedAt = Date.now();
-    const { nonce } = store.issue(0.15, issuedAt);
+    const { nonce } = store.issue(0.15, issuedAt, "/v1/route/quote");
 
     const justBeforeTimeout = issuedAt + (CHALLENGE_TTL_SECONDS - 1) * 1000;
     const justAfterTimeout = issuedAt + (CHALLENGE_TTL_SECONDS + 1) * 1000;
@@ -67,7 +80,7 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
     // otherwise the "timed out" assertion below wouldn't prove the TTL
     // is what triggered the rejection.
     const freshStore = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const fresh = freshStore.issue(0.15, issuedAt);
+    const fresh = freshStore.issue(0.15, issuedAt, "/v1/route/quote");
     expect(freshStore.consume(fresh.nonce, 0.15, justBeforeTimeout)).toEqual({ ok: true });
 
     const result = store.consume(nonce, 0.15, justAfterTimeout);

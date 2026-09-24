@@ -74,7 +74,13 @@ export class ChallengeStore {
     private readonly treasuryAddress: string,
   ) {}
 
-  issue(amountUsdc: number, now: number): X402Challenge {
+  // `resource` is real, caller-supplied (2026-09-24 fix, caught live
+  // while manually verifying the rank x402 extension): this used to be
+  // hardcoded to "/v1/route/quote" regardless of which route actually
+  // issued the challenge, so a rank-issued challenge lied about what
+  // it was for. No test caught it because no test asserted on this
+  // field's VALUE, only its presence.
+  issue(amountUsdc: number, now: number, resource: string): X402Challenge {
     const nonce = randomUUID();
     const expiresAtMs = now + CHALLENGE_TTL_SECONDS * 1000;
     this.db
@@ -84,7 +90,7 @@ export class ChallengeStore {
       scheme: "exact",
       network: "base",
       maxAmountRequired: amountUsdc.toFixed(2),
-      resource: "/v1/route/quote",
+      resource,
       payTo: this.treasuryAddress,
       asset: "USDC",
       nonce,

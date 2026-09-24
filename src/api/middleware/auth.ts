@@ -41,6 +41,135 @@ export interface AuthMiddlewareDeps {
   routePriceUsdc?: number;
 }
 
+export interface X402VerifyDeps {
+  challengeStore: ChallengeStore;
+  processedEvents: ProcessedEventStore;
+  chainReader: MinimalChainReader;
+  treasuryAddress: string;
+  routePriceUsdc: number;
+  // The real path this challenge is FOR — caught live 2026-09-24 as a
+  // hardcoded-wrong value (see ChallengeStore.issue's own comment);
+  // now every caller must say what it's actually issuing a challenge
+  // for, rather than silently inheriting quote's old hardcoded string.
+  resource: string;
+}
+
+/**
+ * The x402-specific half of createAuthMiddleware below, extracted
+ * 2026-09-24 so rank.ts can accept x402 payments too WITHOUT reusing
+ * this file's Bearer branch (which charges the ledger inline, as part
+ * of auth — correct for quote's "always charge on successful auth"
+ * guarantee, wrong for rank's "debit only if a real match exists"
+ * one). Same reasoning as extracting checkAdminSecret in admin.ts:
+ * don't duplicate a security-critical verification path across two
+ * files, extract the ONE place it's checked instead.
+ *
+ * Real settlement asymmetry, documented not hidden (Robert,
+ * 2026-09-24: "the asymmetry is real and unavoidable... documenting
+ * this explicit rail-specific behavior is the correct path"): by the
+ * time a payment proof reaches this function, real USDC already moved
+ * on-chain — there is no way to defer or undo that if a caller's
+ * request later turns out to have no match. Bearer can defer its
+ * ledger debit until after scoring; x402 cannot defer an
+ * already-settled transfer. Callers on the x402 rail pay on successful
+ * verification, full stop — same as quote.ts already does, and now
+ * also true for rank.ts.
+ *
+ * On success: sets the X-Payment-Receipt response header (same reuse
+ * window as quote's existing behavior) and returns {ok:true}. On
+ * failure: sends the 402 challenge response itself and returns
+ * {ok:false} — callers must return immediately without sending
+ * anything else.
+ */
+export async function verifyX402Payment(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  requestHash: string,
+  deps: X402VerifyDeps,
+): Promise<{ ok: true; nonce: string } | { ok: false }> {
+  const now = Date.now();
+
+  const receiptHeader = request.headers["x-payment-receipt"];
+  if (typeof receiptHeader === "string" && receiptHeader) {
+    const verification = verifyReceiptToken(receiptHeader, now);
+    if (verification.valid && verification.payload.requestHash === requestHash) {
+      return { ok: true, nonce: verification.payload.nonce };
+    }
+    // Invalid, expired, or request-hash-mismatched receipt falls
+    // through to a fresh payment attempt rather than failing
+    // immediately — the client may still have a valid X-PAYMENT header.
+  }
+
+  const paymentHeader = request.headers["x-payment"];
+  const submission = decodePaymentHeader(typeof paymentHeader === "string" ? paymentHeader : undefined);
+
+  if ("error" in submission) {
+    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now);
+    return { ok: false };
+  }
+
+  const consumed = deps.challengeStore.consume(submission.nonce, submission.amountUsdc, now);
+  if (!consumed.ok) {
+    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now, consumed.reason);
+    return { ok: false };
+  }
+
+  // Check 2: signature proves payerAddress authorized this exact
+  // nonce/amount/txHash.
+  const message = buildPaymentAuthorizationMessage({
+    nonce: submission.nonce,
+    amountUsdc: submission.amountUsdc,
+    txHash: submission.txHash,
+    network: "base",
+  });
+  const recovered = recoverPayerAddress(message, submission.signature);
+  if (!recovered.valid || recovered.address.toLowerCase() !== submission.payerAddress.toLowerCase()) {
+    sendPaymentRequired(
+      reply,
+      deps.challengeStore,
+      deps.routePriceUsdc,
+      deps.resource,
+      now,
+      !recovered.valid ? recovered.reason : "signature does not match claimed payerAddress",
+    );
+    return { ok: false };
+  }
+
+  // Check 2.5: this exact on-chain payment hasn't already been used to
+  // authorize a DIFFERENT request — the nonce alone doesn't prevent
+  // reusing one real transfer against many nonces.
+  const txAlreadyUsed = deps.processedEvents.isProcessed(submission.txHash);
+  if (txAlreadyUsed) {
+    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now, "this transaction has already been used to authorize a different payment");
+    return { ok: false };
+  }
+
+  // Check 3: the transfer actually happened on-chain, to us, for
+  // enough USDC.
+  const onChain = await verifyOnChainUsdcTransfer(
+    deps.chainReader,
+    submission.txHash,
+    submission.payerAddress,
+    deps.treasuryAddress,
+    submission.amountUsdc,
+  );
+  if (!onChain.valid) {
+    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now, onChain.reason);
+    return { ok: false };
+  }
+
+  deps.processedEvents.recordIfNew(submission.txHash, "base_onchain", submission.payerAddress, submission.amountUsdc);
+
+  const receipt = signReceipt({
+    requestHash,
+    nonce: submission.nonce,
+    issuedAtMs: now,
+    expiresAtMs: now + RECEIPT_TTL_SECONDS * 1000,
+  });
+  reply.header("X-Payment-Receipt", receipt);
+  return { ok: true, nonce: submission.nonce };
+}
+
 /**
  * CLAUDE.md §4 Dual-Rail — Bearer API keys (real, hashed, prepaid-
  * credit-backed) OR x402/USDC (machine-native), either sufficient.
@@ -73,7 +202,6 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
   const routePriceUsdc = deps.routePriceUsdc ?? DEFAULT_ROUTE_PRICE_USDC;
 
   return async function authMiddleware(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const now = Date.now();
     // Hash the VALIDATED/defaulted request (set by validateQuoteRequest,
     // which must run before this middleware), not the raw body — two
     // requests differing only by an omitted vs. explicit default value
@@ -105,90 +233,23 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
       // fallback for missing credentials.
     }
 
-    const receiptHeader = request.headers["x-payment-receipt"];
-    if (typeof receiptHeader === "string" && receiptHeader) {
-      const verification = verifyReceiptToken(receiptHeader, now);
-      if (verification.valid && verification.payload.requestHash === requestHash) {
-        request.authContext = { rail: "x402", identifier: verification.payload.nonce.slice(0, 8) };
-        return;
-      }
-      // Invalid, expired, or request-hash-mismatched receipt falls
-      // through to a fresh payment attempt rather than failing
-      // immediately — the client may still have a valid X-PAYMENT header.
+    const result = await verifyX402Payment(request, reply, requestHash, {
+      challengeStore: deps.challengeStore,
+      processedEvents: deps.processedEvents,
+      chainReader: deps.chainReader,
+      treasuryAddress: deps.treasuryAddress,
+      routePriceUsdc,
+      resource: "/v1/route/quote",
+    });
+    if (result.ok) {
+      request.authContext = { rail: "x402", identifier: result.nonce.slice(0, 8) };
     }
-
-    const paymentHeader = request.headers["x-payment"];
-    const submission = decodePaymentHeader(typeof paymentHeader === "string" ? paymentHeader : undefined);
-
-    if (!("error" in submission)) {
-      const consumed = deps.challengeStore.consume(submission.nonce, submission.amountUsdc, now);
-      if (!consumed.ok) {
-        sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, consumed.reason);
-        return;
-      }
-
-      // Check 2: signature proves payerAddress authorized this exact
-      // nonce/amount/txHash.
-      const message = buildPaymentAuthorizationMessage({
-        nonce: submission.nonce,
-        amountUsdc: submission.amountUsdc,
-        txHash: submission.txHash,
-        network: "base",
-      });
-      const recovered = recoverPayerAddress(message, submission.signature);
-      if (!recovered.valid || recovered.address.toLowerCase() !== submission.payerAddress.toLowerCase()) {
-        sendPaymentRequired(
-          reply,
-          deps.challengeStore,
-          routePriceUsdc,
-          now,
-          !recovered.valid ? recovered.reason : "signature does not match claimed payerAddress",
-        );
-        return;
-      }
-
-      // Check 2.5: this exact on-chain payment hasn't already been
-      // used to authorize a DIFFERENT request — the nonce alone
-      // doesn't prevent reusing one real transfer against many nonces.
-      const txAlreadyUsed = deps.processedEvents.isProcessed(submission.txHash);
-      if (txAlreadyUsed) {
-        sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, "this transaction has already been used to authorize a different payment");
-        return;
-      }
-
-      // Check 3: the transfer actually happened on-chain, to us, for
-      // enough USDC.
-      const onChain = await verifyOnChainUsdcTransfer(
-        deps.chainReader,
-        submission.txHash,
-        submission.payerAddress,
-        deps.treasuryAddress,
-        submission.amountUsdc,
-      );
-      if (!onChain.valid) {
-        sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now, onChain.reason);
-        return;
-      }
-
-      deps.processedEvents.recordIfNew(submission.txHash, "base_onchain", submission.payerAddress, submission.amountUsdc);
-
-      const receipt = signReceipt({
-        requestHash,
-        nonce: submission.nonce,
-        issuedAtMs: now,
-        expiresAtMs: now + RECEIPT_TTL_SECONDS * 1000,
-      });
-      reply.header("X-Payment-Receipt", receipt);
-      request.authContext = { rail: "x402", identifier: submission.nonce.slice(0, 8) };
-      return;
-    }
-
-    sendPaymentRequired(reply, deps.challengeStore, routePriceUsdc, now);
+    // On failure, verifyX402Payment already sent the 402 response.
   };
 }
 
-function sendPaymentRequired(reply: FastifyReply, challengeStore: ChallengeStore, priceUsdc: number, now: number, reason?: string): void {
-  const challenge = challengeStore.issue(priceUsdc, now);
+function sendPaymentRequired(reply: FastifyReply, challengeStore: ChallengeStore, priceUsdc: number, resource: string, now: number, reason?: string): void {
+  const challenge = challengeStore.issue(priceUsdc, now, resource);
   reply.code(402).send({
     x402Version: 1,
     error: "payment_required",

@@ -33,14 +33,14 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
       "## Coverage",
       coverageSentence(deps.runpodIsLive),
       "",
-      "## Auth — two rails",
-      "Rail 1, prepaid Bearer (works on /v1/compute/rank, /v1/route/quote): `Authorization: Bearer sw_live_...`. Get a key: POST /v1/signup (free, human step). Fund it: POST /v1/checkout-sessions (real Stripe Checkout, human step, $10 minimum). Once funded, an agent calls the API with the key — no further human involvement until the balance runs out.",
-      "Rail 2, x402 / USDC on Base (works on /v1/route/quote only, not on /v1/compute/rank): an unauthenticated request to /v1/route/quote returns HTTP 402 with a real payment challenge (nonce, payTo, maxAmountRequired). Pay it with a signed on-chain USDC transfer on Base, resubmit with the `X-PAYMENT` header, get a 200. No API key, no signup, no card, ever.",
+      "## Auth — two rails, both work on /v1/compute/rank as of 2026-09-24",
+      "Rail 1, prepaid Bearer (works on /v1/compute/rank, /v1/route/quote): `Authorization: Bearer sw_live_...`. Get a key: POST /v1/signup (free, human step). Fund it: POST /v1/checkout-sessions (real Stripe Checkout, human step, $10 minimum). Once funded, an agent calls the API with the key — no further human involvement until the balance runs out. Debit is deferred until AFTER scoring — a no_match/no_inventory result is never charged.",
+      "Rail 2, x402 / USDC on Base (works on /v1/compute/rank AND /v1/route/quote): an unauthenticated request returns HTTP 402 with a real payment challenge (nonce, payTo, maxAmountRequired). Pay it with a signed on-chain USDC transfer on Base, resubmit with the `X-PAYMENT` header, get a 200. No API key, no signup, no card, ever. IMPORTANT asymmetry: unlike the Bearer rail, x402 settles on successful payment verification BEFORE scoring runs — real USDC has already moved by the time a no_match/no_inventory result is known, and there is no refund path for it. Every response's billing.rail field tells you which guarantee applied.",
       "",
       "## Endpoints",
-      "- GET /v1/compute/sample (alias: /v1/route/sample) — anonymous, no key, fixed query, rate-limited. Try before you pay.",
-      "- POST /v1/compute/rank (alias: /v1/route/rank) — Bearer-only, no x402 on this route. Body: {gpuClass?, minVramGb?, region?, maxPricePerHour?, preference: \"cheapest\"|\"fastest\"|\"balanced\"}. Response is a frozen envelope: {status, schema_version, coverage, recommended, alternatives, limits, billing}. Every offer under recommended/alternatives includes observed_at, freshness_seconds, source (\"live_api\"|\"fixture\"), availability_status (provider-reported, nullable), and classification (\"provider_reported\" — everything except score/scoreBreakdown/reason is the provider's own claim, untouched). limits always reads {not_reserved: true, not_provisioned: true, can_provision: false} — this endpoint never executes anything.",
-      "- POST /v1/route/quote — the x402-capable endpoint (see Auth above). Older, separate response shape: provider_observed / scoutwyze_estimated / metadata provenance split (CLAUDE.md's original schema), not the compute/rank envelope. Use this one if your agent pays autonomously; use compute/rank if a human has already funded a key.",
+      "- GET /v1/compute/sample (alias: /v1/route/sample) — anonymous, no key, fixed query, rate-limited, never billed on either rail. Try before you pay.",
+      "- POST /v1/compute/rank (alias: /v1/route/rank) — dual-rail (Bearer or x402, see Auth above). Body: {gpuClass?, minVramGb?, region?, maxPricePerHour?, preference: \"cheapest\"|\"fastest\"|\"balanced\"}. Response is a frozen envelope: {status, schema_version, coverage, recommended, alternatives, limits, billing}. billing.rail is \"bearer\" or \"x402\" — see Auth above for why that matters. Every offer under recommended/alternatives includes observed_at, freshness_seconds, source (\"live_api\"|\"fixture\"), availability_status (provider-reported, nullable), and classification (\"provider_reported\" — everything except score/scoreBreakdown/reason is the provider's own claim, untouched). limits always reads {not_reserved: true, not_provisioned: true, can_provision: false} — this endpoint never executes anything.",
+      "- POST /v1/route/quote — also dual-rail, but a separate, older response shape: provider_observed / scoutwyze_estimated / metadata provenance split (CLAUDE.md's original schema), not the compute/rank envelope. Same x402 settle-before-scoring behavior as compute/rank (quote always charges on successful auth, on either rail).",
       deps.bookIsPublished
         ? "- POST /v1/route/book — Bearer-only. Re-runs rank server-side, dispatches only to RunPod, debits only after RunPod accepts the job. Body: same as rank plus {hours}."
         : "- POST /v1/route/book exists but is not yet documented here — it hasn't had a successful end-to-end live test yet. Don't build against it until this line changes.",
@@ -78,7 +78,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
       },
       "/v1/compute/rank": {
         post: {
-          summary: "Rank current GPU offers for your workload (Bearer-only, no x402 on this route). Also reachable at /v1/route/rank (legacy alias).",
+          summary: "Rank current GPU offers for your workload. Dual-rail: Bearer key OR native x402/USDC-on-Base payment (added 2026-09-24). Also reachable at /v1/route/rank (legacy alias).",
           security: [{ bearerAuth: [] }],
           requestBody: {
             content: {
@@ -98,10 +98,9 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
           },
           responses: {
             "200": {
-              description: "Frozen envelope: {status, schema_version: \"1.0\", coverage, recommended, alternatives, limits, billing}. status: ok | no_match | no_inventory. On ok: recommended + alternatives, each with observed_at, freshness_seconds, source (live_api|fixture), availability_status (provider-reported, nullable), classification (\"provider_reported\"). limits is always {not_reserved: true, not_provisioned: true, can_provision: false} — this endpoint never executes anything.",
+              description: "Frozen envelope: {status, schema_version: \"1.0\", coverage, recommended, alternatives, limits, billing}. status: ok | no_match | no_inventory. billing.rail is \"bearer\" or \"x402\" — the two rails settle differently: Bearer defers its ledger debit until AFTER scoring (no_match is never charged); x402 settles on successful payment verification BEFORE scoring (a no_match result is still billable:true on x402 — real USDC already moved on-chain, with no refund path). On ok: recommended + alternatives, each with observed_at, freshness_seconds, source (live_api|fixture), availability_status (provider-reported, nullable), classification (\"provider_reported\"). limits is always {not_reserved: true, not_provisioned: true, can_provision: false} — this endpoint never executes anything.",
             },
-            "401": { description: "missing/unknown key" },
-            "402": { description: "insufficient credits" },
+            "402": { description: "insufficient credits (recognized Bearer key, zero balance — no x402 fallback attempted in this specific case) OR a real x402 payment challenge (missing/unrecognized Bearer key)" },
           },
         },
       },
@@ -149,7 +148,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
     }
 
     reply.type("application/json").send({
-      openapi: "3.0.3",
+      openapi: "3.1.0",
       info: {
         title: "ScoutWyze Compute",
         version: "1.0.0",

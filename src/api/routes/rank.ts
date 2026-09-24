@@ -3,7 +3,11 @@ import { z } from "zod";
 import type { IngestionCache } from "../../ingestion/cache.js";
 import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
+import type { ProcessedEventStore } from "../../payments/processedEvents.js";
+import type { MinimalChainReader } from "../../payments/baseVerification.js";
+import type { ChallengeStore } from "../middleware/x402.js";
 import { computeRequestHash, DEFAULT_ROUTE_PRICE_USDC } from "../middleware/x402.js";
+import { verifyX402Payment } from "../middleware/auth.js";
 import { filterAndScore, type RankedCandidate } from "../../engine/rankedScoring.js";
 import type { ProviderId } from "../../types/schema.js";
 import type { RequestLogStore } from "../../admin/requestLog.js";
@@ -14,6 +18,12 @@ export interface RankRouteDeps {
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
   requestLog: RequestLogStore;
+  // x402 rail (2026-09-24) — same real deps quote.ts already wires,
+  // reused here via auth.ts's verifyX402Payment rather than duplicated.
+  challengeStore: ChallengeStore;
+  processedEvents: ProcessedEventStore;
+  chainReader: MinimalChainReader;
+  treasuryAddress: string;
   routePriceUsdc?: number;
   // Real gap closed 2026-09-22 (Robert: "Production path is RunPod
   // only... do not recommend a provider we will 401/unsupported") —
@@ -52,21 +62,29 @@ function liveProviders(candidates: RankedCandidate[]): ProviderId[] {
  * new/separate from POST /v1/route/quote by deliberate choice
  * (2026-09-22): the existing route's response is locked to
  * CLAUDE.md's provider_observed/scoutwyze_estimated/metadata
- * provenance split, and its dual-rail x402-or-Bearer auth always
- * charges on successful auth regardless of whether results exist.
- * This route's spec explicitly wants a flatter response and "debit
- * only if a real match exists" — different enough to be its own
- * endpoint rather than a breaking rewrite of the other one (and its
- * ~30 existing tests).
+ * provenance split. That separation still holds.
  *
  * Also registered at /v1/route/rank — legacy alias (2026-09-23
- * namespace cleanup: /v1/compute/* is the canonical path now that a
- * second vertical is on the roadmap; /v1/route/* kept live since
- * nothing has broken it yet, not because anything currently depends
- * on it).
+ * namespace cleanup).
  *
- * Bearer-only, no x402 fallback: an unrecognized/missing key is a
- * real 401 here, not a 402 x402 challenge.
+ * Dual-rail as of 2026-09-24 (extends x402 cleanly onto this route,
+ * reusing auth.ts's verifyX402Payment — see that function's own doc
+ * comment for the full reasoning). The two rails settle differently,
+ * documented here rather than hidden:
+ *   - Bearer: debit deferred until AFTER scoring — a no_match/
+ *     no_inventory result is never charged. Unchanged from before.
+ *   - x402: settles on successful payment verification, BEFORE
+ *     scoring — real USDC has already moved on-chain by the time this
+ *     handler knows whether there's a match, and there is no refund
+ *     path for a no-match result. Same behavior quote.ts already has;
+ *     now also true here. Every response's billing.rail field tells
+ *     the caller which guarantee applied to that specific request.
+ * A Bearer header with an unrecognized/revoked key, or no
+ * Authorization header at all, falls through to attempt x402 — same
+ * "genuine alternative rail, not a fallback for missing credentials"
+ * behavior quote.ts already has. A recognized Bearer key with zero
+ * balance still hard-402s without attempting x402 (matches quote's
+ * own precedent: a known-but-broke Bearer key never falls through).
  */
 export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): void {
   const routePriceUsdc = deps.routePriceUsdc ?? DEFAULT_ROUTE_PRICE_USDC;
@@ -79,23 +97,37 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
     if (!parsedBody.success) {
       return reply.code(400).send({ error: "invalid_request", details: parsedBody.error.issues });
     }
+    const requestHash = computeRequestHash(parsedBody.data);
+
+    let rail: "bearer" | "x402";
+    let accountId: string | null = null; // only set on the Bearer rail — x402 has no ledger account to charge
 
     const authHeader = request.headers["authorization"];
-    if (typeof authHeader !== "string" || !authHeader.startsWith("Bearer ")) {
-      return reply.code(401).send({ error: "unauthorized", message: "Missing or malformed Authorization: Bearer <api_key> header." });
-    }
-    const rawKey = authHeader.slice("Bearer ".length).trim();
-    const keyRecord = deps.apiKeyStore.lookupByRawKey(rawKey);
-    if (!keyRecord) {
-      return reply.code(401).send({ error: "unauthorized", message: "Unknown or revoked API key." });
-    }
+    const bearerAttempted = typeof authHeader === "string" && authHeader.startsWith("Bearer ");
+    const keyRecord = bearerAttempted ? deps.apiKeyStore.lookupByRawKey(authHeader.slice("Bearer ".length).trim()) : null;
 
-    // 402 on zero balance, BEFORE scoring — cheap short-circuit for
-    // the common "never funded" case. A balance that's merely too low
-    // for the actual charge (nonzero but < routePriceUsdc) is still
-    // caught below, at the real atomic debit.
-    if (deps.creditLedger.getBalance(keyRecord.accountId) <= 0) {
-      return reply.code(402).send({ error: "insufficient_credits", message: "Zero balance.", balanceUsd: 0 });
+    if (keyRecord) {
+      // Recognized key — zero-balance hard-402s WITHOUT attempting
+      // x402, matching quote.ts's own precedent (a known-but-broke
+      // Bearer key never falls through there either).
+      if (deps.creditLedger.getBalance(keyRecord.accountId) <= 0) {
+        return reply.code(402).send({ error: "insufficient_credits", message: "Zero balance.", balanceUsd: 0 });
+      }
+      rail = "bearer";
+      accountId = keyRecord.accountId;
+    } else {
+      // No Authorization header, malformed, or an unrecognized/revoked
+      // key — all fall through to x402 as a genuine alternative rail.
+      const x402Result = await verifyX402Payment(request, reply, requestHash, {
+        challengeStore: deps.challengeStore,
+        processedEvents: deps.processedEvents,
+        chainReader: deps.chainReader,
+        treasuryAddress: deps.treasuryAddress,
+        routePriceUsdc,
+        resource: "/v1/compute/rank",
+      });
+      if (!x402Result.ok) return; // verifyX402Payment already sent the 402 challenge
+      rail = "x402";
     }
 
     const result = filterAndScore(parsedBody.data, deps.cache.getStates(), { allowedProviders: deps.bookableProviders });
@@ -104,19 +136,44 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
       return reply.code(200).send({
         status: result.status,
         schema_version: SCHEMA_VERSION,
-        billing: { billable: false, unit: "successful_rank", price_usd: routePriceUsdc },
+        billing:
+          rail === "bearer"
+            ? { billable: false, unit: "successful_rank", price_usd: routePriceUsdc, rail }
+            : {
+                // x402 already settled before scoring ran — see this
+                // route's own doc comment. Billable is true here
+                // because it WAS billed, not because this response is
+                // being charged now.
+                billable: true,
+                unit: "successful_rank",
+                price_usd: routePriceUsdc,
+                rail,
+                note: "Payment settled on-chain before scoring ran. x402 has no refund path for a no-match result — unlike the Bearer rail, which never charges when there's no match.",
+              },
       });
     }
 
-    // Real eligible row exists — debit now, atomically, same
-    // check-and-deduct guarantee as the existing Bearer rail.
-    const requestHash = computeRequestHash(parsedBody.data);
-    const charge = deps.creditLedger.charge(keyRecord.accountId, routePriceUsdc, requestHash);
-    if (!charge.ok) {
-      return reply.code(402).send({ error: "insufficient_credits", message: charge.reason, balanceUsd: charge.balanceUsd });
+    const [recommended, ...alternatives] = result.ranked as [RankedCandidate, ...RankedCandidate[]];
+
+    if (rail === "bearer") {
+      // Real eligible row exists — debit now, atomically, same
+      // check-and-deduct guarantee as before.
+      const charge = deps.creditLedger.charge(accountId!, routePriceUsdc, requestHash);
+      if (!charge.ok) {
+        return reply.code(402).send({ error: "insufficient_credits", message: charge.reason, balanceUsd: charge.balanceUsd });
+      }
+      return reply.code(200).send({
+        status: "ok",
+        schema_version: SCHEMA_VERSION,
+        coverage: { vertical: "gpu_compute", providers_live: liveProviders(result.ranked) },
+        recommended,
+        alternatives,
+        limits: NOT_PROVISIONED_LIMITS,
+        billing: { billable: true, unit: "successful_rank", price_usd: routePriceUsdc, rail, creditsRemaining: charge.balanceAfterUsd },
+      });
     }
 
-    const [recommended, ...alternatives] = result.ranked as [RankedCandidate, ...RankedCandidate[]];
+    // x402 — already settled before scoring; no ledger, no creditsRemaining.
     return reply.code(200).send({
       status: "ok",
       schema_version: SCHEMA_VERSION,
@@ -124,7 +181,7 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
       recommended,
       alternatives,
       limits: NOT_PROVISIONED_LIMITS,
-      billing: { billable: true, unit: "successful_rank", price_usd: routePriceUsdc, creditsRemaining: charge.balanceAfterUsd },
+      billing: { billable: true, unit: "successful_rank", price_usd: routePriceUsdc, rail },
     });
   };
 

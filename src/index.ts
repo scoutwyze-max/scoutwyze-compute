@@ -171,7 +171,18 @@ async function main() {
   }
   const bookableProviders = bookers.map((b) => b.providerId);
 
-  registerRankRoute(app, { cache, apiKeyStore, creditLedger, requestLog, routePriceUsdc: ROUTE_PRICE_USDC, bookableProviders });
+  registerRankRoute(app, {
+    cache,
+    apiKeyStore,
+    creditLedger,
+    requestLog,
+    challengeStore,
+    processedEvents,
+    chainReader,
+    treasuryAddress: BASE_TREASURY_ADDRESS,
+    routePriceUsdc: ROUTE_PRICE_USDC,
+    bookableProviders,
+  });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
   registerSampleRoute(app, { cache, bookableProviders, requestLog });
   registerDiscoveryRoutes(app, { baseUrl: BASE_URL, runpodIsLive, bookIsPublished: BOOK_IS_PUBLISHED });
