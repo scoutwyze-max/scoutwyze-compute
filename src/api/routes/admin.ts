@@ -1,7 +1,21 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
+
+/** Shared by admin.ts and adminConsole.ts — the ONE place the raw
+ * X-Admin-Secret is ever compared, so a future change to how it's
+ * checked (like the constant-time fix below) can't drift between the
+ * two call sites. Constant-time comparison — a naive !== leaks timing
+ * info about how many leading bytes matched, same reasoning as
+ * x402.ts's verifyReceiptToken and admin/session.ts's verify(). */
+export function checkAdminSecret(provided: unknown, adminSecret: string): boolean {
+  if (typeof provided !== "string") return false;
+  const providedBuf = Buffer.from(provided);
+  const expectedBuf = Buffer.from(adminSecret);
+  return providedBuf.length === expectedBuf.length && timingSafeEqual(providedBuf, expectedBuf);
+}
 
 export interface AdminRouteDeps {
   apiKeyStore: ApiKeyStore;
@@ -23,8 +37,7 @@ export interface AdminRouteDeps {
  */
 export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps): void {
   const requireAdmin = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const provided = request.headers["x-admin-secret"];
-    if (provided !== deps.adminSecret) {
+    if (!checkAdminSecret(request.headers["x-admin-secret"], deps.adminSecret)) {
       reply.code(401).send({ error: "unauthorized", message: "Missing or invalid X-Admin-Secret header." });
     }
   };

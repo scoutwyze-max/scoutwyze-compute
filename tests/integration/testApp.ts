@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type Database from "better-sqlite3";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { IngestionCache } from "../../src/ingestion/cache.js";
 import { PROVIDER_ADAPTERS } from "../../src/providers/registry.js";
 import { registerQuoteRoute } from "../../src/api/routes/quote.js";
@@ -16,6 +18,11 @@ import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
 import { ChallengeStore } from "../../src/api/middleware/x402.js";
 import { ProcessedEventStore } from "../../src/payments/processedEvents.js";
+import { RequestLogStore } from "../../src/admin/requestLog.js";
+import { AgentLogStore } from "../../src/admin/agentLog.js";
+import { OutreachRunner } from "../../src/admin/outreachRunner.js";
+import { registerAdminConsoleRoutes } from "../../src/api/routes/adminConsole.js";
+import { registerAdminConsolePage } from "../../src/api/routes/adminConsolePage.js";
 import { FakeChainReader } from "../helpers/fakeChainReader.js";
 import { FakeCheckoutSessionCreator } from "../helpers/fakeCheckoutSessionCreator.js";
 import { FakeVendorBooker } from "../helpers/fakeVendorBooker.js";
@@ -45,6 +52,8 @@ export interface TestApp {
   checkoutSessionCreator: FakeCheckoutSessionCreator;
   lambdaLabsBooker: FakeVendorBooker;
   runpodBooker: FakeVendorBooker;
+  requestLog: RequestLogStore;
+  agentLog: AgentLogStore;
 }
 
 export interface BuildTestAppOptions {
@@ -72,6 +81,12 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
   const creditLedger = new CreditLedger(db);
   const challengeStore = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
   const processedEvents = new ProcessedEventStore(db);
+  const requestLog = new RequestLogStore(db);
+  const agentLog = new AgentLogStore(db);
+  // Fake script, no real GitHub API calls from the test suite — see
+  // outreachRunner.ts's own doc comment on why this is injectable.
+  const fakeOutreachScript = join(dirname(fileURLToPath(import.meta.url)), "..", "helpers", "fakeOutreachScript.mjs");
+  const outreachRunner = new OutreachRunner(agentLog, fakeOutreachScript, []);
   const chainReader = new FakeChainReader(); // no real network, ever, in tests
   const { rawKey } = apiKeyStore.create(TEST_ACCOUNT_ID);
   creditLedger.topUp(TEST_ACCOUNT_ID, TEST_STARTING_BALANCE_USD);
@@ -103,10 +118,12 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
   const bookIsPublished = options.bookIsPublished ?? false;
 
   registerPublicSignupPage(app, { baseUrl: "https://example.com", runpodIsLive: false, bookIsPublished });
-  registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: 0.15, bookableProviders });
+  registerRankRoute(app, { cache, apiKeyStore, creditLedger, requestLog, routePriceUsdc: 0.15, bookableProviders });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
-  registerSampleRoute(app, { cache, bookableProviders });
+  registerSampleRoute(app, { cache, bookableProviders, requestLog });
   registerDiscoveryRoutes(app, { baseUrl: "https://example.com", runpodIsLive: false, bookIsPublished });
+  registerAdminConsoleRoutes(app, { apiKeyStore, creditLedger, processedEvents, requestLog, agentLog, outreachRunner, adminSecret: TEST_ADMIN_SECRET });
+  registerAdminConsolePage(app, { adminSecret: TEST_ADMIN_SECRET });
 
   app.addHook("onClose", async () => {
     db.close();
@@ -129,5 +146,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
     checkoutSessionCreator,
     lambdaLabsBooker,
     runpodBooker,
+    requestLog,
+    agentLog,
   };
 }

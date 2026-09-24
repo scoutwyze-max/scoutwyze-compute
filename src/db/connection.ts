@@ -77,6 +77,36 @@ export function createDatabase(filePath: string): Database.Database {
       amount_usd_cents INTEGER NOT NULL,
       processed_at TEXT NOT NULL
     );
+
+    -- Admin console telemetry (2026-09-24) — per-request health for
+    -- the two public compute endpoints only (sample/rank), not a
+    -- general-purpose request log for the whole app. Append-only,
+    -- unbounded for now; V1 scope, real gap: no retention/pruning
+    -- policy yet, fine at current traffic, would need one before this
+    -- table grows unbounded at real volume.
+    CREATE TABLE IF NOT EXISTS request_log (
+      id TEXT PRIMARY KEY,
+      route TEXT NOT NULL CHECK (route IN ('compute_sample','compute_rank')),
+      status_code INTEGER NOT NULL,
+      latency_ms INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_request_log_route_created ON request_log(route, created_at);
+
+    -- Admin console agent feed (2026-09-24) — append-only status log
+    -- for triggered agent runs (currently just the outreach discovery
+    -- script). "kind" distinguishes a plain status line from an
+    -- operator-triggered run so the UI can render them differently;
+    -- "run_id" groups a triggered run's start/progress/completion
+    -- lines together (NULL for anything that isn't part of a run).
+    CREATE TABLE IF NOT EXISTS agent_log (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('status','run_started','run_completed','run_failed')),
+      run_id TEXT,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_log_created ON agent_log(created_at);
   `);
 
   return db;

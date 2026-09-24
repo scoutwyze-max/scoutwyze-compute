@@ -6,11 +6,14 @@ import type { CreditLedger } from "../../billing/creditLedger.js";
 import { computeRequestHash, DEFAULT_ROUTE_PRICE_USDC } from "../middleware/x402.js";
 import { filterAndScore, type RankedCandidate } from "../../engine/rankedScoring.js";
 import type { ProviderId } from "../../types/schema.js";
+import type { RequestLogStore } from "../../admin/requestLog.js";
+import { createRequestTimingHooks } from "../middleware/requestTiming.js";
 
 export interface RankRouteDeps {
   cache: IngestionCache;
   apiKeyStore: ApiKeyStore;
   creditLedger: CreditLedger;
+  requestLog: RequestLogStore;
   routePriceUsdc?: number;
   // Real gap closed 2026-09-22 (Robert: "Production path is RunPod
   // only... do not recommend a provider we will 401/unsupported") —
@@ -125,6 +128,9 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
     });
   };
 
-  app.post("/v1/compute/rank", handler);
-  app.post("/v1/route/rank", handler);
+  // Timing hooks (admin console telemetry) — attached per-route, not
+  // globally; see requestTiming.ts's own doc comment for why.
+  const hooks = createRequestTimingHooks("compute_rank", deps.requestLog);
+  app.post("/v1/compute/rank", hooks, handler);
+  app.post("/v1/route/rank", hooks, handler);
 }

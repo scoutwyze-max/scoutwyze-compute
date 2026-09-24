@@ -26,6 +26,11 @@ import { CreditLedger } from "./billing/creditLedger.js";
 import { ChallengeStore } from "./api/middleware/x402.js";
 import { ProcessedEventStore } from "./payments/processedEvents.js";
 import { StripeCheckoutSessionCreator } from "./payments/stripeCheckout.js";
+import { RequestLogStore } from "./admin/requestLog.js";
+import { AgentLogStore } from "./admin/agentLog.js";
+import { OutreachRunner } from "./admin/outreachRunner.js";
+import { registerAdminConsoleRoutes } from "./api/routes/adminConsole.js";
+import { registerAdminConsolePage } from "./api/routes/adminConsolePage.js";
 import { logger } from "./utils/logger.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -102,6 +107,9 @@ async function main() {
   const apiKeyStore = new ApiKeyStore(db);
   const creditLedger = new CreditLedger(db);
   const processedEvents = new ProcessedEventStore(db);
+  const requestLog = new RequestLogStore(db);
+  const agentLog = new AgentLogStore(db);
+  const outreachRunner = new OutreachRunner(agentLog);
 
   // Real Base RPC connection — used only to READ transaction receipts
   // (verifying a real USDC transfer happened), never to send
@@ -163,15 +171,22 @@ async function main() {
   }
   const bookableProviders = bookers.map((b) => b.providerId);
 
-  registerRankRoute(app, { cache, apiKeyStore, creditLedger, routePriceUsdc: ROUTE_PRICE_USDC, bookableProviders });
+  registerRankRoute(app, { cache, apiKeyStore, creditLedger, requestLog, routePriceUsdc: ROUTE_PRICE_USDC, bookableProviders });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
-  registerSampleRoute(app, { cache, bookableProviders });
+  registerSampleRoute(app, { cache, bookableProviders, requestLog });
   registerDiscoveryRoutes(app, { baseUrl: BASE_URL, runpodIsLive, bookIsPublished: BOOK_IS_PUBLISHED });
 
   if (!ADMIN_SECRET) {
     logger.warn("ADMIN_SECRET not set — using an insecure dev-only default. Set a real secret before any real deployment.");
   }
-  registerAdminRoutes(app, { apiKeyStore, creditLedger, adminSecret: ADMIN_SECRET || "dev-only-insecure-admin-secret" });
+  // Resolved once, shared by the operational admin API (X-Admin-Secret
+  // header, curl-friendly) and the admin console (session-gated, see
+  // admin/session.ts's own doc comment for why it's a separate cookie-
+  // based layer rather than reusing the header directly).
+  const adminSecret = ADMIN_SECRET || "dev-only-insecure-admin-secret";
+  registerAdminRoutes(app, { apiKeyStore, creditLedger, adminSecret });
+  registerAdminConsoleRoutes(app, { apiKeyStore, creditLedger, processedEvents, requestLog, agentLog, outreachRunner, adminSecret });
+  registerAdminConsolePage(app, { adminSecret });
 
   if (!STRIPE_WEBHOOK_SECRET) {
     // Deliberately no insecure fallback for this one, unlike

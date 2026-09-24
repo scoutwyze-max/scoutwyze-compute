@@ -90,4 +90,11 @@ export class ApiKeyStore {
     const result = this.db.prepare(`UPDATE api_keys SET revoked = 1 WHERE key_id = ?`).run(keyId);
     return result.changes > 0;
   }
+
+  /** Admin console KPI — count of currently-usable keys, not "ever
+   * issued" (revoked keys don't count as active). */
+  countActive(): number {
+    const row = this.db.prepare<[], { count: number }>(`SELECT COUNT(*) as count FROM api_keys WHERE revoked = 0`).get();
+    return row?.count ?? 0;
+  }
 }

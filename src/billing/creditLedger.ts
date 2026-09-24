@@ -155,4 +155,36 @@ export class CreditLedger {
       .all(accountId);
     return rows.map(rowToEntry);
   }
+
+  /** Admin console — across ALL accounts, not scoped to one. Newest
+   * first, for a feed the operator reads top-down. */
+  getRecentLedgerAcrossAccounts(limit: number): LedgerEntry[] {
+    const rows = this.db
+      .prepare<[number], LedgerRow>(`SELECT * FROM ledger_entries ORDER BY created_at DESC LIMIT ?`)
+      .all(limit);
+    return rows.map(rowToEntry);
+  }
+
+  /** Admin console — total charged since sinceIso, used for both the
+   * "24h revenue" KPI (the raw total) and "burn rate" (that total
+   * divided by the window length) so the two cards can't silently
+   * disagree by being computed two different ways. */
+  getChargeTotalSince(sinceIso: string): number {
+    const row = this.db
+      .prepare<[string], { total: number | null }>(
+        `SELECT SUM(amount_usd_cents) as total FROM ledger_entries WHERE type = 'charge' AND created_at >= ?`,
+      )
+      .get(sinceIso);
+    return (row?.total ?? 0) / 100;
+  }
+
+  /** Admin console — every account's current balance, highest first. */
+  getAllBalances(limit: number): { accountId: string; balanceUsd: number }[] {
+    const rows = this.db
+      .prepare<[number], { account_id: string; balance_usd_cents: number }>(
+        `SELECT account_id, balance_usd_cents FROM accounts ORDER BY balance_usd_cents DESC LIMIT ?`,
+      )
+      .all(limit);
+    return rows.map((r) => ({ accountId: r.account_id, balanceUsd: r.balance_usd_cents / 100 }));
+  }
 }

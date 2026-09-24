@@ -54,4 +54,15 @@ export class ProcessedEventStore {
       throw err;
     }
   }
+
+  /** Admin console — real Stripe pack purchases specifically (not
+   * base_onchain), newest first, for the "credit pack purchases" feed. */
+  recentStripePurchases(limit: number): { eventId: string; accountId: string; amountUsd: number; processedAt: string }[] {
+    const rows = this.db
+      .prepare<[number], { event_id: string; account_id: string; amount_usd_cents: number; processed_at: string }>(
+        `SELECT event_id, account_id, amount_usd_cents, processed_at FROM processed_payment_events WHERE source = 'stripe' ORDER BY processed_at DESC LIMIT ?`,
+      )
+      .all(limit);
+    return rows.map((r) => ({ eventId: r.event_id, accountId: r.account_id, amountUsd: r.amount_usd_cents / 100, processedAt: r.processed_at }));
+  }
 }

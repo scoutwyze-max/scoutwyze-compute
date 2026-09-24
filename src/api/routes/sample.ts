@@ -3,6 +3,8 @@ import type { IngestionCache } from "../../ingestion/cache.js";
 import { filterAndScore, type RankedCandidate } from "../../engine/rankedScoring.js";
 import type { ProviderId } from "../../types/schema.js";
 import { FixedWindowRateLimiter } from "../middleware/rateLimiter.js";
+import type { RequestLogStore } from "../../admin/requestLog.js";
+import { createRequestTimingHooks } from "../middleware/requestTiming.js";
 
 // Kept identical to rank.ts's own constants (2026-09-23 envelope
 // freeze) — sample is a preview of rank's real shape, so it must not
@@ -17,6 +19,7 @@ function liveProviders(candidates: RankedCandidate[]): ProviderId[] {
 export interface SampleRouteDeps {
   cache: IngestionCache;
   bookableProviders: ProviderId[];
+  requestLog: RequestLogStore;
 }
 
 // Placeholder defaults, not a considered capacity decision — tune once
@@ -73,6 +76,7 @@ export function registerSampleRoute(app: FastifyInstance, deps: SampleRouteDeps)
     });
   };
 
-  app.get("/v1/compute/sample", handler);
-  app.get("/v1/route/sample", handler);
+  const hooks = createRequestTimingHooks("compute_sample", deps.requestLog);
+  app.get("/v1/compute/sample", hooks, handler);
+  app.get("/v1/route/sample", hooks, handler);
 }
