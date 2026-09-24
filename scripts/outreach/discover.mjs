@@ -27,6 +27,13 @@ const SIGNALS = [
   { query: `"RUNPOD_API_KEY" in:file`, label: "references RUNPOD_API_KEY" },
   { query: `"cloud.lambdalabs.com" in:file`, label: "calls Lambda Labs' API directly" },
   { query: `"LAMBDA_API_KEY" in:file`, label: "references LAMBDA_API_KEY" },
+  // Widened 2026-09-24 — still precise (a real SDK import / a real,
+  // specific env var name), not a broad keyword match. "gpu pricing"-
+  // style keyword signals were deliberately left out even at this
+  // widening: GitHub code search can't qualify them precisely enough,
+  // and the noise would cost more review time than it's worth.
+  { query: `"from runpod import" in:file`, label: "imports RunPod's official Python SDK" },
+  { query: `"RUNPOD_ENDPOINT_ID" in:file`, label: "references RUNPOD_ENDPOINT_ID (serverless)" },
 ];
 
 // The providers' own orgs match every signal by construction (their
@@ -34,9 +41,15 @@ const SIGNALS = [
 // finding from the first live test run, not a hypothetical: RunPod's
 // own runpodctl and worker-a1111 repos both matched. These are the
 // provider, not a customer of the provider; excluded, not a lead.
-const EXCLUDED_OWNERS = new Set(["runpod", "runpod-workers", "lambdalabs", "lambda-labs", "coreweave"]);
+// "lambdalabsml" added 2026-09-24: 4 of 60 hits in one run, same
+// pattern as runpod/runpod-workers. Not conclusively provable via the
+// API (no blog/homepage link tying it to the company) — inferred from
+// the org name plus repeat-hit pattern, not certain. Worth a human
+// double-check if it starts producing false negatives (excluding a
+// real, unrelated "LambdaLabsML" someone else owns).
+const EXCLUDED_OWNERS = new Set(["runpod", "runpod-workers", "lambdalabs", "lambda-labs", "lambdalabsml", "coreweave"]);
 
-const MAX_RESULTS_PER_SIGNAL = Number(process.env.OUTREACH_MAX_PER_SIGNAL ?? 15);
+const MAX_RESULTS_PER_SIGNAL = Number(process.env.OUTREACH_MAX_PER_SIGNAL ?? 30);
 // Code search is rate-limited harder than general REST search — stay
 // well under it rather than tune this to the exact documented limit.
 const SEARCH_DELAY_MS = 7000;
