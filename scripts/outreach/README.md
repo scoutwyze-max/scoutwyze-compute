@@ -45,6 +45,11 @@ the exact asymmetry between them. There used to be two separate kit
 flavors (one per rail) back when only `route/quote` had x402; that
 split no longer reflects reality and was removed.
 
+A third path was added 2026-09-24, once it was real: `@scoutwyze/compute-mcp`
+is published on npm and cold-`npx`-verified, so kits now also show the
+MCP config block for Claude Desktop/Cursor — same underlying Bearer
+key as Path A, just wired into an MCP host instead of called directly.
+
 ## Signals used for discovery
 
 Precise, low-noise only — direct provider API calls or the providers'

@@ -51,6 +51,19 @@ rank = requests.post(
 `;
 }
 
+function mcpSnippet() {
+  return `{
+  "mcpServers": {
+    "scoutwyze-compute": {
+      "command": "npx",
+      "args": ["-y", "@scoutwyze/compute-mcp"],
+      "env": { "SCOUTWYZE_API_KEY": "sw_live_..." }
+    }
+  }
+}
+`;
+}
+
 function x402Snippet() {
   return `# 1. Call it with no credentials at all — real 402 challenge back
 curl -X POST ${BASE_URL}/v1/compute/rank -d '{"gpuClass":"H100"}'
@@ -92,14 +105,22 @@ ${x402Snippet()}\`\`\`
 
 This path settles on payment BEFORE scoring — real USDC has already moved by the time a \`no_match\` is known, and there's no refund path for it (the response says so explicitly when it happens). That's the tradeoff for not needing a signup step at all.
 
+## Path C — via MCP, if this is used inside Claude Desktop or Cursor
+
+Real, published, cold-\`npx\`-verified — not a placeholder. Uses Path A's prepaid key under the hood (the MCP server never holds a private key or settles x402 itself; on an unauthenticated call it surfaces the real 402 challenge back to you instead of failing silently).
+
+\`\`\`json
+${mcpSnippet()}\`\`\`
+
 ## Suggested outreach copy (draft — edit before use, if used at all)
 
-> Saw ${candidate.fullName} calls a GPU provider's API directly — thought you might want a live price/freshness check alongside it. Free sample, no key: \`curl ${BASE_URL}/v1/compute/sample\`. If it's for a human-operated service, $10 prepaid gets you a key. If it's for an autonomous agent, it can pay per-call over x402 with no key at all.
+> Saw ${candidate.fullName} calls a GPU provider's API directly — thought you might want a live price/freshness check alongside it. Free sample, no key: \`curl ${BASE_URL}/v1/compute/sample\`. If it's for a human-operated service, $10 prepaid gets you a key (also works as an MCP tool in Claude Desktop/Cursor — \`npx @scoutwyze/compute-mcp\`). If it's for an autonomous agent, it can pay per-call over x402 with no key at all.
 
 ## Funnel
 - Free sample first, either way: \`GET /v1/compute/sample\`
 - Path A: \`POST /v1/signup\` (free) → \`POST /v1/checkout-sessions\` ($10/$50/$200, real Stripe) → \`POST /v1/compute/rank\` with the key
 - Path B: \`POST /v1/compute/rank\` unauthenticated → real 402 challenge → pay it → retry with \`X-PAYMENT\`
+- Path C: same key as Path A, wired into an MCP host instead of called directly
 `;
 }
 
