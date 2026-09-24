@@ -33,12 +33,14 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
       "## Coverage",
       coverageSentence(deps.runpodIsLive),
       "",
-      "## Auth",
-      "Bearer token (`Authorization: Bearer sw_live_...`). Get a key: POST /v1/signup (free). Fund it: POST /v1/checkout-sessions (real Stripe Checkout).",
+      "## Auth — two rails",
+      "Rail 1, prepaid Bearer (works on /v1/compute/rank, /v1/route/quote): `Authorization: Bearer sw_live_...`. Get a key: POST /v1/signup (free, human step). Fund it: POST /v1/checkout-sessions (real Stripe Checkout, human step, $10 minimum). Once funded, an agent calls the API with the key — no further human involvement until the balance runs out.",
+      "Rail 2, x402 / USDC on Base (works on /v1/route/quote only, not on /v1/compute/rank): an unauthenticated request to /v1/route/quote returns HTTP 402 with a real payment challenge (nonce, payTo, maxAmountRequired). Pay it with a signed on-chain USDC transfer on Base, resubmit with the `X-PAYMENT` header, get a 200. No API key, no signup, no card, ever.",
       "",
       "## Endpoints",
-      "- GET /v1/route/sample — anonymous, no key, fixed query, rate-limited. Try before you pay.",
-      "- POST /v1/route/rank — Bearer-only (no x402 on this route). Body: {gpuClass?, minVramGb?, region?, maxPricePerHour?, preference: \"cheapest\"|\"fastest\"|\"balanced\"}. Every offer includes observed_at, freshness_seconds, source (\"live_api\"|\"fixture\"), and availability_status (provider-reported, nullable) — check these before trusting a number.",
+      "- GET /v1/compute/sample (alias: /v1/route/sample) — anonymous, no key, fixed query, rate-limited. Try before you pay.",
+      "- POST /v1/compute/rank (alias: /v1/route/rank) — Bearer-only, no x402 on this route. Body: {gpuClass?, minVramGb?, region?, maxPricePerHour?, preference: \"cheapest\"|\"fastest\"|\"balanced\"}. Response is a frozen envelope: {status, schema_version, coverage, recommended, alternatives, limits, billing}. Every offer under recommended/alternatives includes observed_at, freshness_seconds, source (\"live_api\"|\"fixture\"), availability_status (provider-reported, nullable), and classification (\"provider_reported\" — everything except score/scoreBreakdown/reason is the provider's own claim, untouched). limits always reads {not_reserved: true, not_provisioned: true, can_provision: false} — this endpoint never executes anything.",
+      "- POST /v1/route/quote — the x402-capable endpoint (see Auth above). Older, separate response shape: provider_observed / scoutwyze_estimated / metadata provenance split (CLAUDE.md's original schema), not the compute/rank envelope. Use this one if your agent pays autonomously; use compute/rank if a human has already funded a key.",
       deps.bookIsPublished
         ? "- POST /v1/route/book — Bearer-only. Re-runs rank server-side, dispatches only to RunPod, debits only after RunPod accepts the job. Body: same as rank plus {hours}."
         : "- POST /v1/route/book exists but is not yet documented here — it hasn't had a successful end-to-end live test yet. Don't build against it until this line changes.",
@@ -68,15 +70,15 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
           responses: { "200": { description: "checkoutUrl to redirect the user to" } },
         },
       },
-      "/v1/route/sample": {
+      "/v1/compute/sample": {
         get: {
-          summary: "Anonymous, rate-limited sample of a real ranked offer — no key required",
-          responses: { "200": { description: "Same shape as /v1/route/rank's response, for a fixed cheapest-preference query" }, "429": { description: "rate limited" } },
+          summary: "Anonymous, rate-limited sample of a real ranked offer — no key required. Also reachable at /v1/route/sample (legacy alias).",
+          responses: { "200": { description: "Same envelope as /v1/compute/rank's response, for a fixed cheapest-preference query" }, "429": { description: "rate limited" } },
         },
       },
-      "/v1/route/rank": {
+      "/v1/compute/rank": {
         post: {
-          summary: "Rank current GPU offers for your workload (Bearer-only, no x402 on this route)",
+          summary: "Rank current GPU offers for your workload (Bearer-only, no x402 on this route). Also reachable at /v1/route/rank (legacy alias).",
           security: [{ bearerAuth: [] }],
           requestBody: {
             content: {
@@ -96,10 +98,19 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
           },
           responses: {
             "200": {
-              description: "status: ok | no_match | no_inventory. On ok: recommended + alternatives, each with observed_at, freshness_seconds, source (live_api|fixture), availability_status (provider-reported, nullable).",
+              description: "Frozen envelope: {status, schema_version: \"1.0\", coverage, recommended, alternatives, limits, billing}. status: ok | no_match | no_inventory. On ok: recommended + alternatives, each with observed_at, freshness_seconds, source (live_api|fixture), availability_status (provider-reported, nullable), classification (\"provider_reported\"). limits is always {not_reserved: true, not_provisioned: true, can_provision: false} — this endpoint never executes anything.",
             },
             "401": { description: "missing/unknown key" },
             "402": { description: "insufficient credits" },
+          },
+        },
+      },
+      "/v1/route/quote": {
+        post: {
+          summary: "Same underlying rank data, dual-rail auth: Bearer key OR native x402/USDC-on-Base payment. Response uses the older provider_observed/scoutwyze_estimated/metadata schema, not the compute/rank envelope.",
+          responses: {
+            "200": { description: "provider_observed (raw provider facts) / scoutwyze_estimated (computed cost + risk) / metadata (ttl, confidence, request_id) — CLAUDE.md's original provenance-split schema." },
+            "402": { description: "Payment Required — no valid Bearer key and no valid X-PAYMENT header. Body includes a real x402 challenge: nonce, payTo, maxAmountRequired (USDC), expiresAt." },
           },
         },
       },

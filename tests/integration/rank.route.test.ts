@@ -57,8 +57,26 @@ describe("POST /v1/route/rank — no_match does not debit", () => {
       payload: { gpuClass: "definitely-not-a-real-gpu-xyz" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: "no_match" });
+    expect(res.json()).toEqual({
+      status: "no_match",
+      schema_version: "1.0",
+      billing: { billable: false, unit: "successful_rank", price_usd: 0.15 },
+    });
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore, 5);
+  });
+});
+
+describe("POST /v1/compute/rank — canonical path (2026-09-23 namespace cleanup)", () => {
+  it("works identically to the /v1/route/rank legacy alias", async () => {
+    built = await buildTestApp();
+    const res = await built.app.inject({
+      method: "POST",
+      url: "/v1/compute/rank",
+      headers: { authorization: `Bearer ${built.apiKey}` },
+      payload: { gpuClass: "H100", preference: "cheapest" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("ok");
   });
 });
 
@@ -82,9 +100,16 @@ describe("POST /v1/route/rank — real match debits exactly once and returns the
     expect(body.recommended.reason).toMatch(/\$[\d.]+\/hr/);
     expect(body.recommended.scoreBreakdown.weights).toEqual({ price: 0.8, freshness: 0.2 });
     expect(Array.isArray(body.alternatives)).toBe(true);
-    expect(body.creditsRemaining).toBeCloseTo(balanceBefore - 0.15, 5);
+    expect(body.billing.creditsRemaining).toBeCloseTo(balanceBefore - 0.15, 5);
 
     expect(built.creditLedger.getBalance(built.accountId)).toBeCloseTo(balanceBefore - 0.15, 5);
+
+    // Frozen envelope fields (2026-09-23 pivot: stable shape agent-side
+    // parsers cache against).
+    expect(body.schema_version).toBe("1.0");
+    expect(body.coverage).toEqual({ vertical: "gpu_compute", providers_live: expect.any(Array) });
+    expect(body.limits).toEqual({ not_reserved: true, not_provisioned: true, can_provision: false });
+    expect(body.billing).toMatchObject({ billable: true, unit: "successful_rank", price_usd: 0.15 });
 
     // Provenance fields (2026-09-23: "live" isn't allowed in copy until
     // callers can SEE which rows are actually live) — must be present
@@ -92,6 +117,7 @@ describe("POST /v1/route/rank — real match debits exactly once and returns the
     expect(body.recommended.observed_at).toBeTruthy();
     expect(typeof body.recommended.freshness_seconds).toBe("number");
     expect(["live_api", "fixture"]).toContain(body.recommended.source);
+    expect(body.recommended.classification).toBe("provider_reported");
     expect(body.recommended.fetchedAt).toBeUndefined(); // renamed, not duplicated
   });
 

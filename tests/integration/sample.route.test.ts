@@ -15,9 +15,20 @@ describe("GET /v1/route/sample", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.status).toBe("ok");
+    expect(body.schema_version).toBe("1.0");
     expect(body.recommended.provider).toBe("runpod"); // default test app: RunPod-only, mirrors production
+    expect(body.recommended.classification).toBe("provider_reported");
     expect(Array.isArray(body.alternatives)).toBe(true);
-    expect(body.note).toBeTruthy();
+    expect(body.limits).toEqual({ not_reserved: true, not_provisioned: true, can_provision: false });
+    expect(body.billing).toMatchObject({ billable: false, unit: "successful_rank" });
+    expect(body.billing.note).toBeTruthy();
+  });
+
+  it("also answers on the canonical /v1/compute/sample path", async () => {
+    built = await buildTestApp();
+    const res = await built.app.inject({ method: "GET", url: "/v1/compute/sample" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("ok");
   });
 
   it("never touches the credit ledger — it's not billed", async () => {

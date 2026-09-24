@@ -14,8 +14,9 @@ describe("GET /llms.txt", () => {
     const res = await built.app.inject({ method: "GET", url: "/llms.txt" });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toMatch(/text\/plain/);
-    expect(res.body).toContain("/v1/route/sample");
-    expect(res.body).toContain("/v1/route/rank");
+    expect(res.body).toContain("/v1/compute/sample");
+    expect(res.body).toContain("/v1/compute/rank");
+    expect(res.body).toContain("/v1/route/quote");
     expect(res.body).toMatch(/multi-cloud aggregator/i);
   });
 
@@ -39,8 +40,9 @@ describe("GET /openapi.json", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.openapi).toBe("3.0.3");
-    expect(body.paths["/v1/route/sample"]).toBeTruthy();
-    expect(body.paths["/v1/route/rank"]).toBeTruthy();
+    expect(body.paths["/v1/compute/sample"]).toBeTruthy();
+    expect(body.paths["/v1/compute/rank"]).toBeTruthy();
+    expect(body.paths["/v1/route/quote"]).toBeTruthy();
     expect(body.paths["/v1/signup"]).toBeTruthy();
   });
 

@@ -65,10 +65,10 @@ function buildHtml(deps: PublicPageDeps): string {
   <p class="sub">Rank current RunPod GPU offers for your workload. Timestamped quotes and scores.${bookSubClause} $10 prepaid, no subscription.</p>
 
   <div class="label">1. Try it free — no key required</div>
-  <pre>curl ${deps.baseUrl}/v1/route/sample</pre>
+  <pre>curl ${deps.baseUrl}/v1/compute/sample</pre>
 
   <div class="label">2. Real query with your own key</div>
-  <pre>curl -X POST ${deps.baseUrl}/v1/route/rank \\
+  <pre>curl -X POST ${deps.baseUrl}/v1/compute/rank \\
   -H "Authorization: Bearer sw_live_..." \\
   -H "Content-Type: application/json" \\
   -d '{"gpuClass":"H100","preference":"cheapest"}'</pre>
@@ -76,6 +76,8 @@ function buildHtml(deps: PublicPageDeps): string {
   <div class="label">Example response</div>
   <pre>{
   "status": "ok",
+  "schema_version": "1.0",
+  "coverage": { "vertical": "gpu_compute", "providers_live": ["runpod"] },
   "recommended": {
     "provider": "runpod",
     "sku": "NVIDIA H100 80GB HBM3",
@@ -85,17 +87,19 @@ function buildHtml(deps: PublicPageDeps): string {
     "freshness_seconds": 41,
     "source": "live_api",
     "availability_status": "low",
+    "classification": "provider_reported",
     "score": 0.999,
     "reason": "Cheapest match on runpod: $21.20/hr (price score 1.00), updated just now."
   },
   "alternatives": [ ... ],
-  "creditsRemaining": 9.85
+  "limits": { "not_reserved": true, "not_provisioned": true, "can_provision": false },
+  "billing": { "billable": true, "unit": "successful_rank", "price_usd": 0.15, "creditsRemaining": 9.85 }
 }</pre>
 
   <div class="coverage">${coverageLine}</div>
 
   <div class="coverage">
-    <div><strong>POST /v1/route/rank</strong> — Bearer-only (no x402 on this route). $0.15/request, debited only on a real match.</div>
+    <div><strong>POST /v1/compute/rank</strong> — Bearer-only (no x402 on this route). $0.15/request, debited only on a real match.</div>
     ${bookSection}
   </div>
 

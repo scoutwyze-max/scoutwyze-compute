@@ -33,6 +33,13 @@ export interface RankedCandidate {
   freshness_seconds: number;
   source: FactSource;
   availability_status: ProviderReportedAvailability | null;
+  // Static tag (2026-09-23 envelope freeze): every field above this
+  // line is a provider's own claim, untouched — as opposed to score/
+  // scoreBreakdown/reason below, which are ScoutWyze's own
+  // computation over those claims. One literal value today; not an
+  // enum of one by accident, just nothing else reaches a caller yet
+  // that would need a second value.
+  classification: "provider_reported";
   score: number;
   scoreBreakdown: ScoreBreakdown;
   reason: string;
@@ -175,6 +182,7 @@ export function filterAndScore(
     freshness_seconds: c.ageSeconds,
     source: c.source,
     availability_status: c.availabilityStatus,
+    classification: "provider_reported",
     score: Math.round(c.score * 1000) / 1000,
     scoreBreakdown: {
       priceScore: Math.round(c.priceScore * 1000) / 1000,
