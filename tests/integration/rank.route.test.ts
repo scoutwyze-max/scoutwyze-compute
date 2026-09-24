@@ -52,6 +52,31 @@ describe("POST /v1/route/rank — auth (2026-09-24: dual-rail, x402 extended ont
     expect(body.accepts?.[0]?.nonce).toBeTruthy();
   });
 
+  it("includes a real Bazaar discovery extension, sibling of accepts — not nested inside it", async () => {
+    // 2026-09-24: schema verified against the real x402-foundation
+    // source (buildBazaarBodyExtension's own doc comment has the
+    // citation), not assumed. This asserts the actual output shape,
+    // not just that some "extensions" key exists.
+    built = await buildTestApp();
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/rank", payload: {} });
+    expect(res.statusCode).toBe(402);
+    const body = res.json();
+
+    expect(body.accepts).toBeTruthy(); // sibling, not replaced
+    expect(body.extensions).toBeTruthy();
+    expect(body.extensions.accepts).toBeUndefined(); // never nested inside accepts
+
+    const bazaar = body.extensions.bazaar;
+    expect(bazaar.info.input.type).toBe("http");
+    expect(bazaar.info.input.method).toBe("POST");
+    expect(bazaar.info.input.bodyType).toBe("json");
+    expect(bazaar.info.input.body).toEqual({ gpuClass: "H100", preference: "cheapest" });
+    expect(bazaar.info.output.example.status).toBe("ok");
+    expect(bazaar.schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+    expect(bazaar.schema.properties.input.required).toEqual(["type", "method", "bodyType", "body"]);
+    expect(bazaar.schema.properties.input.properties.body.properties.gpuClass.type).toBe("string");
+  });
+
   it("falls through to a real x402 challenge on an unknown/revoked key — not a bare 401", async () => {
     built = await buildTestApp();
     const res = await built.app.inject({

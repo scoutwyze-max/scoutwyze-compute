@@ -6,7 +6,7 @@ import type { CreditLedger } from "../../billing/creditLedger.js";
 import type { ProcessedEventStore } from "../../payments/processedEvents.js";
 import type { MinimalChainReader } from "../../payments/baseVerification.js";
 import type { ChallengeStore } from "../middleware/x402.js";
-import { computeRequestHash, DEFAULT_ROUTE_PRICE_USDC } from "../middleware/x402.js";
+import { computeRequestHash, DEFAULT_ROUTE_PRICE_USDC, buildBazaarBodyExtension } from "../middleware/x402.js";
 import { verifyX402Payment } from "../middleware/auth.js";
 import { filterAndScore, type RankedCandidate } from "../../engine/rankedScoring.js";
 import type { ProviderId } from "../../types/schema.js";
@@ -40,6 +40,53 @@ const RankRequestBody = z.object({
   region: z.string().optional(),
   maxPricePerHour: z.number().positive().optional(),
   preference: z.enum(["cheapest", "fastest", "balanced"]).default("cheapest"),
+});
+
+// x402 Bazaar discovery declaration (2026-09-24) — attached to this
+// route's 402 responses so a facilitator that implements the Bazaar
+// extension can catalog it once a real payment settles (see
+// x402.ts's buildBazaarBodyExtension for the schema source/reasoning).
+// inputJsonSchema hand-mirrors RankRequestBody above field-for-field —
+// no zod-to-JSON-Schema dependency added for five static properties.
+const RANK_BAZAAR_EXTENSION = buildBazaarBodyExtension({
+  method: "POST",
+  inputExample: { gpuClass: "H100", preference: "cheapest" },
+  inputJsonSchema: {
+    type: "object",
+    properties: {
+      gpuClass: { type: "string", description: "Filter by GPU model substring, e.g. H100 (case-insensitive)" },
+      minVramGb: { type: "number", minimum: 0, description: "Minimum GPU memory in GB" },
+      region: { type: "string", description: "Filter by region prefix (case-insensitive)" },
+      maxPricePerHour: { type: "number", exclusiveMinimum: 0, description: "Maximum vendor hourly price in USD" },
+      preference: { type: "string", enum: ["cheapest", "fastest", "balanced"], description: "Ranking strategy - defaults to cheapest" },
+    },
+  },
+  // Real production shape, trimmed to one alternative — matches what
+  // this route actually returns, not a hypothetical.
+  outputExample: {
+    status: "ok",
+    schema_version: "1.0",
+    coverage: { vertical: "gpu_compute", providers_live: ["runpod"] },
+    recommended: {
+      provider: "runpod",
+      sku: "NVIDIA H100 80GB HBM3",
+      region: "US-CA-2",
+      vendorHourly: 2.69,
+      vramGb: 80,
+      gpuCount: 1,
+      observed_at: "2026-09-24T00:00:00.000Z",
+      freshness_seconds: 12,
+      source: "live_api",
+      availability_status: "low",
+      classification: "provider_reported",
+      score: 0.94,
+      scoreBreakdown: { priceScore: 0.93, freshnessScore: 0.99, weights: { price: 0.8, freshness: 0.2 }, ageMinutes: 0.2 },
+      reason: "Cheapest match on runpod: $2.69/hr (price score 0.93), updated just now.",
+    },
+    alternatives: [],
+    limits: { not_reserved: true, not_provisioned: true, can_provision: false },
+    billing: { billable: true, unit: "successful_rank", price_usd: 0.15, rail: "x402" },
+  },
 });
 
 // Frozen response envelope (2026-09-23 pivot: agent-side parsers cache
@@ -125,6 +172,7 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
         treasuryAddress: deps.treasuryAddress,
         routePriceUsdc,
         resource: "/v1/compute/rank",
+        bazaarExtension: RANK_BAZAAR_EXTENSION,
       });
       if (!x402Result.ok) return; // verifyX402Payment already sent the 402 challenge
       rail = "x402";

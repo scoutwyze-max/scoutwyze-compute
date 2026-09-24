@@ -38,6 +38,74 @@ export interface X402Challenge {
   expiresAt: string;
 }
 
+/**
+ * Bazaar discovery extension (2026-09-24) — the x402 ecosystem's
+ * marketplace/discovery layer (x402 Bazaar, Agentic.Market) catalogs a
+ * resource as a side effect of its FIRST successful settlement through
+ * a Bazaar-aware facilitator, reading this exact structure from
+ * `extensions.bazaar` on the 402 response body (sibling of `accepts`,
+ * not nested inside a challenge entry — verified against
+ * x402-foundation/x402's actual PaymentRequired type, not assumed).
+ *
+ * This is a hand-built equivalent of @x402/extensions'
+ * createBodyDiscoveryExtension (x402-foundation/x402,
+ * typescript/packages/extensions/src/bazaar/http/resourceService.ts,
+ * read directly from the real source 2026-09-24), not that package
+ * itself: pulling in @x402/extensions for one static JSON object costs
+ * 9 dependencies, 1.7MB, and a second full Ethereum library (viem)
+ * alongside the ethers this codebase already uses for chain reads.
+ * This produces the identical output shape for the body-method (POST)
+ * case with none of that weight — it's pure JSON shaping, no crypto,
+ * no chain interaction, matched field-for-field against the real
+ * function.
+ */
+export interface BazaarBodyExtensionConfig {
+  method: "POST";
+  inputExample: Record<string, unknown>;
+  inputJsonSchema: Record<string, unknown>;
+  outputExample: unknown;
+}
+
+export function buildBazaarBodyExtension(config: BazaarBodyExtensionConfig): Record<string, unknown> {
+  return {
+    info: {
+      input: {
+        type: "http" as const,
+        method: config.method,
+        bodyType: "json" as const,
+        body: config.inputExample,
+      },
+      output: { type: "json", example: config.outputExample },
+    },
+    schema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        input: {
+          type: "object",
+          properties: {
+            type: { type: "string", const: "http" },
+            method: { type: "string", enum: [config.method] },
+            bodyType: { type: "string", enum: ["json"] },
+            body: config.inputJsonSchema,
+          },
+          required: ["type", "method", "bodyType", "body"],
+          additionalProperties: false,
+        },
+        output: {
+          type: "object",
+          properties: {
+            type: { type: "string" },
+            example: { type: "object" },
+          },
+          required: ["type"],
+        },
+      },
+      required: ["input"],
+    },
+  };
+}
+
 interface ChallengeRow {
   nonce: string;
   amount_usdc_cents: number;

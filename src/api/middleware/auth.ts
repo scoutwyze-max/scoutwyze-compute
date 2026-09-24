@@ -52,6 +52,12 @@ export interface X402VerifyDeps {
   // now every caller must say what it's actually issuing a challenge
   // for, rather than silently inheriting quote's old hardcoded string.
   resource: string;
+  // Optional Bazaar discovery extension (x402.ts's buildBazaarBodyExtension)
+  // — attached at the top level of the 402 response as extensions.bazaar
+  // when present. Omitted entirely (not an empty object) when a caller
+  // doesn't pass one, so a route that hasn't declared one doesn't emit
+  // a misleading empty extensions block.
+  bazaarExtension?: Record<string, unknown>;
 }
 
 /**
@@ -104,13 +110,13 @@ export async function verifyX402Payment(
   const submission = decodePaymentHeader(typeof paymentHeader === "string" ? paymentHeader : undefined);
 
   if ("error" in submission) {
-    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now);
+    sendPaymentRequired(reply, deps, now);
     return { ok: false };
   }
 
   const consumed = deps.challengeStore.consume(submission.nonce, submission.amountUsdc, now);
   if (!consumed.ok) {
-    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now, consumed.reason);
+    sendPaymentRequired(reply, deps, now, consumed.reason);
     return { ok: false };
   }
 
@@ -126,9 +132,7 @@ export async function verifyX402Payment(
   if (!recovered.valid || recovered.address.toLowerCase() !== submission.payerAddress.toLowerCase()) {
     sendPaymentRequired(
       reply,
-      deps.challengeStore,
-      deps.routePriceUsdc,
-      deps.resource,
+      deps,
       now,
       !recovered.valid ? recovered.reason : "signature does not match claimed payerAddress",
     );
@@ -140,7 +144,7 @@ export async function verifyX402Payment(
   // reusing one real transfer against many nonces.
   const txAlreadyUsed = deps.processedEvents.isProcessed(submission.txHash);
   if (txAlreadyUsed) {
-    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now, "this transaction has already been used to authorize a different payment");
+    sendPaymentRequired(reply, deps, now, "this transaction has already been used to authorize a different payment");
     return { ok: false };
   }
 
@@ -154,7 +158,7 @@ export async function verifyX402Payment(
     submission.amountUsdc,
   );
   if (!onChain.valid) {
-    sendPaymentRequired(reply, deps.challengeStore, deps.routePriceUsdc, deps.resource, now, onChain.reason);
+    sendPaymentRequired(reply, deps, now, onChain.reason);
     return { ok: false };
   }
 
@@ -248,12 +252,16 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
   };
 }
 
-function sendPaymentRequired(reply: FastifyReply, challengeStore: ChallengeStore, priceUsdc: number, resource: string, now: number, reason?: string): void {
-  const challenge = challengeStore.issue(priceUsdc, now, resource);
+function sendPaymentRequired(reply: FastifyReply, deps: X402VerifyDeps, now: number, reason?: string): void {
+  const challenge = deps.challengeStore.issue(deps.routePriceUsdc, now, deps.resource);
   reply.code(402).send({
     x402Version: 1,
     error: "payment_required",
     reason: reason ?? "no valid Authorization: Bearer <api_key> or X-PAYMENT header provided",
     accepts: [challenge],
+    // Sibling of accepts, not nested inside it - verified against the
+    // real x402-foundation PaymentRequired type (x402.ts's
+    // buildBazaarBodyExtension doc comment has the full citation).
+    ...(deps.bazaarExtension ? { extensions: { bazaar: deps.bazaarExtension } } : {}),
   });
 }
