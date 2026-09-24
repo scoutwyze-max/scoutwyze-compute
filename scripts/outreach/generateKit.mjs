@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // Kit generator — turns a discovered candidate into a standalone,
-// human-reviewable integration kit (markdown: context + snippet + draft
-// CTA copy). Never touches the target repo itself — no clone, no diff,
-// no PR, no issue. Output is a local file for review; whether/how to
-// actually reach out is a separate, deliberate decision this script
-// does not make.
+// human-reviewable integration kit (markdown: context + snippets +
+// draft CTA copy). Never touches the target repo itself — no clone,
+// no diff, no PR, no issue. Output is a local file for review;
+// whether/how to actually reach out is a separate, deliberate decision
+// this script does not make.
 //
-// Two flavors, kept deliberately non-overlapping per SOT.md:
-//   - "bearer": /v1/compute/sample + /v1/compute/rank (Bearer-only, no
-//     x402 on these two)
-//   - "x402": /v1/route/quote only (the one endpoint that actually
-//     supports x402/USDC-on-Base, plus Bearer as its fallback rail)
+// One kit type (2026-09-24, collapsed from the earlier bearer/x402
+// split): /v1/compute/rank has been dual-rail since x402 was extended
+// onto it, so a real integration kit for that endpoint has to show
+// BOTH paths, not pick one — a human-operated service wants the
+// prepaid Bearer path, a fully autonomous agent wants x402. Showing
+// only one would misrepresent what the endpoint actually does.
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -28,10 +29,6 @@ function bearerSnippet(stack) {
   if (stack === "python") {
     return `import requests
 
-# Free, no key — same response shape as the paid call below
-sample = requests.get("${BASE_URL}/v1/compute/sample").json()
-
-# Paid — $0.15, debited only on a real match
 rank = requests.post(
     "${BASE_URL}/v1/compute/rank",
     headers={"Authorization": "Bearer sw_live_..."},
@@ -40,22 +37,14 @@ rank = requests.post(
 `;
   }
   if (stack === "node") {
-    return `// Free, no key — same response shape as the paid call below
-const sample = await fetch("${BASE_URL}/v1/compute/sample").then(r => r.json());
-
-// Paid — $0.15, debited only on a real match
-const rank = await fetch("${BASE_URL}/v1/compute/rank", {
+    return `const rank = await fetch("${BASE_URL}/v1/compute/rank", {
   method: "POST",
   headers: { "Authorization": "Bearer sw_live_...", "Content-Type": "application/json" },
   body: JSON.stringify({ gpuClass: "H100", preference: "cheapest" }),
 }).then(r => r.json());
 `;
   }
-  return `# Free, no key
-curl ${BASE_URL}/v1/compute/sample
-
-# Paid — $0.15, debited only on a real match
-curl -X POST ${BASE_URL}/v1/compute/rank \\
+  return `curl -X POST ${BASE_URL}/v1/compute/rank \\
   -H "Authorization: Bearer sw_live_..." \\
   -H "Content-Type: application/json" \\
   -d '{"gpuClass":"H100","preference":"cheapest"}'
@@ -63,24 +52,22 @@ curl -X POST ${BASE_URL}/v1/compute/rank \\
 }
 
 function x402Snippet() {
-  return `# 1. Unauthenticated request gets a real 402 challenge
-curl -X POST ${BASE_URL}/v1/route/quote -d '{}'
+  return `# 1. Call it with no credentials at all — real 402 challenge back
+curl -X POST ${BASE_URL}/v1/compute/rank -d '{"gpuClass":"H100"}'
 # -> 402, body includes nonce / payTo / maxAmountRequired / expiresAt
+#    ("resource" in the challenge correctly says /v1/compute/rank)
 
 # 2. Sign + submit a real on-chain USDC (Base) transfer proving payment,
-#    resubmit with the X-PAYMENT header -> 200
+#    resubmit the SAME request with the X-PAYMENT header -> 200
 #    (see scripts/pay-x402-quote.mjs in the ScoutWyze Compute repo for
 #    a full reference implementation of this flow)
-
-# Bearer key also works on this same endpoint, for teams that'd rather
-# prepay once via Stripe instead of paying per-call on-chain:
-curl -X POST ${BASE_URL}/v1/route/quote \\
-  -H "Authorization: Bearer sw_live_..." \\
-  -d '{"workload_type":"inference","region":"us-east-1"}'
+#
+# No API key. No signup. No card. No human on either end for this path
+# — the agent authenticates itself with a real payment, not a lookup.
 `;
 }
 
-function bearerKit(candidate) {
+function buildKit(candidate) {
   const stack = detectStack(candidate.language);
   return `# Integration kit — ${candidate.fullName}
 
@@ -89,56 +76,37 @@ function bearerKit(candidate) {
 - Why this repo: ${candidate.signal} (matched in \`${candidate.path}\`)
 - Repo: ${candidate.url}
 - Language: ${candidate.language ?? "unknown"} · ★${candidate.stars}
-- Endpoint flavor: Bearer/prepaid (\`/v1/compute/sample\`, \`/v1/compute/rank\`) — no x402 on these two, by design (see SOT.md §4).
+- Endpoint: \`POST /v1/compute/rank\` — $0.15/successful match, dual-rail as of 2026-09-24 (see SOT.md §4/§5). Every response's \`billing.rail\` field says which path was used.
 
-## Suggested integration snippet
+## Path A — prepaid key (a human funds it once, then it's headless)
 
 \`\`\`${stack === "curl" ? "bash" : stack}
 ${bearerSnippet(stack)}\`\`\`
 
-## Suggested outreach copy (draft — edit before use, if used at all)
+Debit is deferred until AFTER scoring — a \`no_match\` result is never charged on this path.
 
-> Saw ${candidate.fullName} calls a GPU provider's API directly — thought you might want a live price/freshness check alongside it. Free sample, no key: \`curl ${BASE_URL}/v1/compute/sample\`. $10 prepaid if you want the filtered version (\`/v1/compute/rank\`), no subscription.
-
-## Funnel
-1. Free sample (\`GET /v1/compute/sample\`) — no signup
-2. \`POST /v1/signup\` — free key
-3. \`POST /v1/checkout-sessions\` — $10/$50/$200 prepaid pack, real Stripe
-4. \`POST /v1/compute/rank\` — $0.15/successful match
-`;
-}
-
-function x402Kit(candidate) {
-  return `# Integration kit (x402) — ${candidate.fullName}
-
-**Review-only draft. Nothing here has been sent to anyone.**
-
-- Why this repo: ${candidate.signal} (matched in \`${candidate.path}\`)
-- Repo: ${candidate.url}
-- Language: ${candidate.language ?? "unknown"} · ★${candidate.stars}
-- Endpoint flavor: x402/USDC-on-Base (\`/v1/route/quote\` only — NOT compute/rank or compute/sample, which are Bearer-only. See SOT.md §4.)
-
-## Suggested integration snippet
+## Path B — fully agent-native, zero human on either end
 
 \`\`\`bash
 ${x402Snippet()}\`\`\`
 
+This path settles on payment BEFORE scoring — real USDC has already moved by the time a \`no_match\` is known, and there's no refund path for it (the response says so explicitly when it happens). That's the tradeoff for not needing a signup step at all.
+
 ## Suggested outreach copy (draft — edit before use, if used at all)
 
-> Saw ${candidate.fullName} calls a GPU provider's API directly — if you're doing anything agent-driven, \`/v1/route/quote\` pays natively over x402/USDC on Base, no API key or signup needed. Real 402 challenge, real on-chain settlement.
+> Saw ${candidate.fullName} calls a GPU provider's API directly — thought you might want a live price/freshness check alongside it. Free sample, no key: \`curl ${BASE_URL}/v1/compute/sample\`. If it's for a human-operated service, $10 prepaid gets you a key. If it's for an autonomous agent, it can pay per-call over x402 with no key at all.
 
 ## Funnel
-1. Agent hits \`POST /v1/route/quote\` unauthenticated → real 402 challenge
-2. Agent signs + submits a real Base USDC transfer, resubmits with \`X-PAYMENT\` → 200
-3. (Or: a Bearer key works on the same endpoint too, for teams that'd rather prepay via Stripe)
+- Free sample first, either way: \`GET /v1/compute/sample\`
+- Path A: \`POST /v1/signup\` (free) → \`POST /v1/checkout-sessions\` ($10/$50/$200, real Stripe) → \`POST /v1/compute/rank\` with the key
+- Path B: \`POST /v1/compute/rank\` unauthenticated → real 402 challenge → pay it → retry with \`X-PAYMENT\`
 `;
 }
 
-export function generateKit(candidate, flavor) {
-  const content = flavor === "x402" ? x402Kit(candidate) : bearerKit(candidate);
+export function generateKit(candidate) {
   const safeName = candidate.fullName.replace("/", "__");
-  const path = `scripts/outreach/kits/${flavor}/${safeName}.md`;
+  const path = `scripts/outreach/kits/${safeName}.md`;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, "utf-8");
+  writeFileSync(path, buildKit(candidate), "utf-8");
   return path;
 }

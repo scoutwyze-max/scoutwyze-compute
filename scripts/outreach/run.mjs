@@ -2,7 +2,7 @@
 // Orchestrator: discovery -> kit generation -> local review. That's it.
 //
 // Usage:
-//   node scripts/outreach/run.mjs [--flavor bearer|x402|both] [--max N]
+//   node scripts/outreach/run.mjs [--max N]
 //
 // Hard boundary, not a suggestion: this script never contacts anyone
 // and never touches a target repo beyond the read-only search +
@@ -15,20 +15,16 @@ import { discover } from "./discover.mjs";
 import { generateKit } from "./generateKit.mjs";
 
 const args = process.argv.slice(2);
-const flavorArg = args.includes("--flavor") ? args[args.indexOf("--flavor") + 1] : "bearer";
 const maxArg = args.includes("--max") ? Number(args[args.indexOf("--max") + 1]) : Infinity;
-const flavors = flavorArg === "both" ? ["bearer", "x402"] : [flavorArg];
 
 const candidates = (await discover()).slice(0, maxArg);
 console.error(`\n${candidates.length} candidate(s) after discovery.\n`);
 
 const index = [];
 for (const candidate of candidates) {
-  for (const flavor of flavors) {
-    const path = generateKit(candidate, flavor);
-    index.push({ repo: candidate.fullName, flavor, path });
-    console.error(`  wrote ${path}`);
-  }
+  const path = generateKit(candidate);
+  index.push({ repo: candidate.fullName, path });
+  console.error(`  wrote ${path}`);
 }
 
 console.error(`\n${index.length} kit(s) written under scripts/outreach/kits/. Review before sending anything, anywhere.`);

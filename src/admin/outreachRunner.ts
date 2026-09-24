@@ -13,8 +13,10 @@ const OUTREACH_SCRIPT_PATH = join(__dirname, "..", "..", "scripts", "outreach", 
 // Fixed, non-operator-editable args (2026-09-24, Robert: "fixed
 // buttons only, no free-text commands") — deliberately not exposed as
 // request parameters. Changing these is a code change, not a console
-// input.
-const OUTREACH_ARGS = ["--flavor", "bearer", "--max", "60"];
+// input. --flavor dropped 2026-09-24: generateKit.mjs no longer has
+// separate flavors now that compute/rank is genuinely dual-rail (see
+// that file's own doc comment).
+const OUTREACH_ARGS = ["--max", "60"];
 
 /**
  * Command-box backend for the one approved action: trigger

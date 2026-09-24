@@ -29,21 +29,21 @@ what, if anything, to do with it.
 ## Usage
 
 ```
-npm run outreach                    # Bearer kits (compute/rank + compute/sample)
-npm run outreach -- --flavor x402   # x402 kit (route/quote only)
-npm run outreach -- --flavor both
+npm run outreach                    # one kit per candidate
 npm run outreach -- --max 5         # cap candidates, e.g. for a quick test run
 ```
 
-## Flavors
+## Kit content (one type, not two — collapsed 2026-09-24)
 
-- `bearer` — `/v1/compute/sample` + `/v1/compute/rank`. Bearer/prepaid
-  only. Never mentions x402 — those two endpoints don't support it
-  (see `SOT.md` §4).
-- `x402` — `/v1/route/quote` only, the one endpoint that actually
-  supports x402/USDC-on-Base (Bearer also works there as a fallback).
-  Never conflated with the `compute/*` envelope, which is a different,
-  separate schema (`SOT.md` §3 vs §4).
+Every kit targets `/v1/compute/rank`, which has been genuinely
+dual-rail since x402 was extended onto it: a Bearer path (a human
+funds a key once, debit deferred until after scoring) and an x402 path
+(a fully autonomous agent pays per-call, zero human on either end,
+settles before scoring — no refund on a `no_match`). A real kit for
+this endpoint has to show both, not pick one — see `SOT.md` §4/§5 for
+the exact asymmetry between them. There used to be two separate kit
+flavors (one per rail) back when only `route/quote` had x402; that
+split no longer reflects reality and was removed.
 
 ## Signals used for discovery
 
