@@ -10,6 +10,7 @@
     "copy-fixtures": "mkdir -p dist/providers/fixtures && cp src/providers/fixtures/*.json dist/providers/fixtures/",
     "start": "node dist/index.js",
     "smoke": "node scripts/smoke-test.mjs",
+    "outreach": "node scripts/outreach/run.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

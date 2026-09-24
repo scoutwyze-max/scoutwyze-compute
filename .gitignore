@@ -8,3 +8,8 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Generated outreach kits — draft, review-only content naming real
+# third-party repos. Not committed by default; a human decides what
+# (if anything) leaves this machine.
+scripts/outreach/kits/
