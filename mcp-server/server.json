@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.scoutwyze-max/compute-mcp",
+  "title": "ScoutWyze Compute",
+  "description": "Ranks current RunPod GPU offers by price and freshness. Supports x402/USDC-on-Base payments.",
+  "websiteUrl": "https://scoutwyze-compute.fly.dev",
+  "repository": {
+    "url": "https://github.com/scoutwyze-max/scoutwyze-compute",
+    "source": "github",
+    "subfolder": "mcp-server"
+  },
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@scoutwyze/compute-mcp",
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "SCOUTWYZE_API_KEY",
+          "description": "Prepaid Bearer API key from POST /v1/signup + POST /v1/checkout-sessions. Optional — omit to run unauthenticated, in which case scoutwyze_rank returns a real x402 payment challenge instead of ranked results.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "SCOUTWYZE_BASE_URL",
+          "description": "Overrides the default API base URL (https://scoutwyze-compute.fly.dev) — for local development only.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

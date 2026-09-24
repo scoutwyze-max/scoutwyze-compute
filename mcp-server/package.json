@@ -1,7 +1,8 @@
 {
   "name": "@scoutwyze/compute-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
+  "mcpName": "io.github.scoutwyze-max/compute-mcp",
   "type": "module",
   "description": "MCP (Model Context Protocol) server for ScoutWyze Compute — ranks current RunPod GPU offers by price and freshness, with native x402/USDC-on-Base micropayment support. Stateless pass-through: holds no private keys, never signs or settles a payment itself.",
   "keywords": [
@@ -26,7 +27,7 @@
   "license": "MIT",
   "main": "dist/index.js",
   "bin": {
-    "scoutwyze-compute-mcp": "./dist/index.js"
+    "scoutwyze-compute-mcp": "dist/index.js"
   },
   "files": [
     "dist"
