@@ -27,10 +27,14 @@ curl -X POST https://scoutwyze-compute.fly.dev/v1/compute/rank \
   -H "Authorization: Bearer sw_live_..." -H "Content-Type: application/json" \
   -d '{"gpuClass":"H100","preference":"cheapest"}'
 
-# Rail 2 — x402/USDC on Base, zero signup, zero API key, ever
+# Rail 2 — x402/USDC on Base, zero signup, zero API key, zero gas
 curl -X POST https://scoutwyze-compute.fly.dev/v1/compute/rank \
   -d '{"gpuClass":"H100"}'
-# -> HTTP 402 with a real payment challenge; pay it, resubmit with X-PAYMENT, get a 200
+# -> HTTP 402 with real payment requirements (EIP-3009 "exact" EVM scheme).
+#    Sign an authorization (no on-chain broadcast needed from you — this
+#    server's facilitator handles that), resubmit with X-PAYMENT, get a 200.
+#    See examples/node-client.mjs or examples/python_client.py for the
+#    real signing flow — not curl-able directly, needs an EIP-712 signature.
 ```
 
 - **`GET /llms.txt`** and **`GET /openapi.json`** — full machine-readable API description, both rails, the x402 error-code vocabulary, everything below.
@@ -55,8 +59,11 @@ curl -X POST https://scoutwyze-compute.fly.dev/v1/compute/rank \
   served stale-as-current.
 - Dual-rail auth, both real: `Authorization: Bearer <api_key>` backed by
   a real hashed-key store + prepaid credit ledger, or x402/USDC-on-Base
-  (`X-PAYMENT` header) with real EIP-191 signature recovery and real
-  on-chain USDC transfer confirmation against the treasury wallet.
+  (`X-PAYMENT` header) — real x402 "exact" EVM scheme (EIP-3009
+  `TransferWithAuthorization`, EIP-712 signature recovery, domain
+  independently verified against the real USDC contract on Base),
+  settled through PayAI's facilitator and independently re-confirmed
+  on-chain by this server, not trusted on the facilitator's claim alone.
 - Real payment intake: a Stripe webhook (signature-verified, idempotent)
   tops up the credit ledger on a completed Checkout Session; self-serve
   `POST /v1/signup` + `POST /v1/checkout-sessions` let a new
@@ -107,10 +114,9 @@ src/
   payments/                  Stripe webhook verification, Stripe Checkout Session creation, real Base/x402
                               on-chain settlement verification, cross-rail payment-event idempotency
   api/                       Fastify routes (quote, signup/checkout, Stripe webhook, admin) + dual-rail auth middleware
-  db/                        SQLite connection + schema (durable: keys, ledger, x402 nonces, processed payment events)
+  db/                        SQLite connection + schema (durable: keys, ledger, processed payment events)
 scripts/
   smoke-test.mjs             Post-deployment smoke test — hits a real running instance over HTTP
-  pay-x402-quote.mjs         Manual two-step x402 payment helper (get challenge, submit signed payment)
 tests/
   unit/                      Pure-function coverage: cost math, risk scoring, filtering, provenance separation, payments
   integration/                Full HTTP flow via Fastify inject(): auth, fail-closed behavior, signup/checkout, webhooks

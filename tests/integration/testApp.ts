@@ -24,8 +24,10 @@ import { OutreachRunner } from "../../src/admin/outreachRunner.js";
 import { registerAdminConsoleRoutes } from "../../src/api/routes/adminConsole.js";
 import { registerAdminConsolePage } from "../../src/api/routes/adminConsolePage.js";
 import { FakeChainReader } from "../helpers/fakeChainReader.js";
+import { FakeFacilitatorClient } from "../helpers/fakeFacilitator.js";
 import { FakeCheckoutSessionCreator } from "../helpers/fakeCheckoutSessionCreator.js";
 import { FakeVendorBooker } from "../helpers/fakeVendorBooker.js";
+import { BASE_USDC_CONTRACT_ADDRESS } from "../../src/payments/baseVerification.js";
 import type { ProviderId } from "../../src/types/schema.js";
 
 const TEST_CACHE_TTL_SECONDS = 300; // generous — tests here aren't exercising TTL behavior itself
@@ -46,6 +48,7 @@ export interface TestApp {
   challengeStore: ChallengeStore;
   processedEvents: ProcessedEventStore;
   chainReader: FakeChainReader;
+  facilitator: FakeFacilitatorClient;
   treasuryAddress: string;
   adminSecret: string;
   stripeWebhookSecret: string;
@@ -79,7 +82,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
   const db = createDatabase(":memory:");
   const apiKeyStore = new ApiKeyStore(db);
   const creditLedger = new CreditLedger(db);
-  const challengeStore = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
+  const challengeStore = new ChallengeStore(TEST_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
   const processedEvents = new ProcessedEventStore(db);
   const requestLog = new RequestLogStore(db);
   const agentLog = new AgentLogStore(db);
@@ -88,6 +91,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
   const fakeOutreachScript = join(dirname(fileURLToPath(import.meta.url)), "..", "helpers", "fakeOutreachScript.mjs");
   const outreachRunner = new OutreachRunner(agentLog, fakeOutreachScript, []);
   const chainReader = new FakeChainReader(); // no real network, ever, in tests
+  const facilitator = new FakeFacilitatorClient(chainReader); // no real call to PayAI, ever, in tests
   const { rawKey } = apiKeyStore.create(TEST_ACCOUNT_ID);
   creditLedger.topUp(TEST_ACCOUNT_ID, TEST_STARTING_BALANCE_USD);
 
@@ -98,6 +102,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
     challengeStore,
     processedEvents,
     chainReader,
+    facilitator,
     treasuryAddress: TEST_TREASURY_ADDRESS,
     quoteTtlSeconds: 300,
   });
@@ -126,6 +131,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
     challengeStore,
     processedEvents,
     chainReader,
+    facilitator,
     treasuryAddress: TEST_TREASURY_ADDRESS,
     routePriceUsdc: 0.15,
     bookableProviders,
@@ -151,6 +157,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
     challengeStore,
     processedEvents,
     chainReader,
+    facilitator,
     treasuryAddress: TEST_TREASURY_ADDRESS,
     adminSecret: TEST_ADMIN_SECRET,
     stripeWebhookSecret: TEST_STRIPE_WEBHOOK_SECRET,

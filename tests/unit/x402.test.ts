@@ -1,6 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import type Database from "better-sqlite3";
-import { createDatabase } from "../../src/db/connection.js";
+import { describe, expect, it } from "vitest";
 import {
   CHALLENGE_TTL_SECONDS,
   ChallengeStore,
@@ -9,90 +7,49 @@ import {
   signReceipt,
   verifyReceiptToken,
 } from "../../src/api/middleware/x402.js";
+import { BASE_USDC_CONTRACT_ADDRESS } from "../../src/payments/baseVerification.js";
 
 const TEST_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9";
 
-describe("ChallengeStore — single-use nonce enforcement", () => {
-  let db: Database.Database;
-  beforeEach(() => {
-    db = createDatabase(":memory:");
+describe("ChallengeStore — real x402 PaymentRequirements, stateless (2026-09-26 rewrite)", () => {
+  // No DB, no pre-issued/consumed nonce anymore — real spec replay
+  // protection is the EIP-3009 authorization's own nonce, enforced
+  // on-chain by the USDC contract itself (see x402.ts's top-of-file
+  // comment for the full reasoning behind this architecture change).
+
+  it("issues well-formed, spec-compliant PaymentRequirements", () => {
+    const store = new ChallengeStore(TEST_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
+    const requirements = store.issue(0.15, "/v1/route/quote");
+    expect(requirements.scheme).toBe("exact");
+    expect(requirements.network).toBe("base");
+    expect(requirements.payTo).toBe(TEST_TREASURY_ADDRESS);
+    expect(requirements.asset).toBe(BASE_USDC_CONTRACT_ADDRESS);
+    expect(requirements.maxTimeoutSeconds).toBe(CHALLENGE_TTL_SECONDS);
   });
 
-  it("issues a well-formed challenge with a real nonce", () => {
-    const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const challenge = store.issue(0.15, Date.now(), "/v1/route/quote");
-    expect(challenge.nonce).toBeTruthy();
-    expect(challenge.scheme).toBe("exact");
-    expect(challenge.network).toBe("base");
-    expect(challenge.maxAmountRequired).toBe("0.15");
-    expect(challenge.payTo).toBe(TEST_TREASURY_ADDRESS);
+  it("maxAmountRequired is atomic USDC units (6 decimals), not a human decimal string — real spec-compliance bug caught and fixed 2026-09-26", () => {
+    // coinbase/x402's own spec: "Required payment amount in atomic
+    // token units", example "10000" = 0.10 USDC. This server
+    // previously sent "0.15" here, which no real spec-compliant
+    // client would ever parse as atomic units.
+    const store = new ChallengeStore(TEST_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
+    const requirements = store.issue(0.15, "/v1/route/quote");
+    expect(requirements.maxAmountRequired).toBe("150000");
   });
 
   it("resource reflects the real caller-supplied path, not a hardcoded one — real bug caught live 2026-09-24", () => {
-    // Previously hardcoded to "/v1/route/quote" regardless of which
-    // route actually issued the challenge — caught by manually testing
-    // a compute/rank 402 response and noticing it claimed to be for
-    // quote. No test existed asserting this field's VALUE, only that
-    // it was present as a string; this is that missing assertion.
-    const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const rankChallenge = store.issue(0.15, Date.now(), "/v1/compute/rank");
-    expect(rankChallenge.resource).toBe("/v1/compute/rank");
-    const quoteChallenge = store.issue(0.15, Date.now(), "/v1/route/quote");
-    expect(quoteChallenge.resource).toBe("/v1/route/quote");
+    const store = new ChallengeStore(TEST_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
+    const rankRequirements = store.issue(0.15, "/v1/compute/rank");
+    expect(rankRequirements.resource).toBe("/v1/compute/rank");
+    const quoteRequirements = store.issue(0.15, "/v1/route/quote");
+    expect(quoteRequirements.resource).toBe("/v1/route/quote");
   });
 
-  it("consumes a fresh, valid nonce exactly once", () => {
-    const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const now = Date.now();
-    const { nonce } = store.issue(0.15, now, "/v1/route/quote");
-
-    expect(store.consume(nonce, 0.15, now)).toEqual({ ok: true });
-    expect(store.consume(nonce, 0.15, now)).toEqual({
-      ok: false,
-      reason: "nonce already used — replay attempt rejected",
-      code: "challenge_already_used",
-    });
-  });
-
-  it("rejects a nonce that was never issued", () => {
-    const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const result = store.consume("never-issued", 0.15, Date.now());
-    expect(result).toEqual({ ok: false, reason: "unknown or already-expired challenge nonce", code: "unknown_challenge" });
-  });
-
-  it("rejects an amount below what the challenge required", () => {
-    const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const now = Date.now();
-    const { nonce } = store.issue(0.2, now, "/v1/route/quote");
-    const result = store.consume(nonce, 0.1, now);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toMatch(/below the required \$0\.2/);
-      expect(result.code).toBe("invalid_exact_evm_payload_authorization_value_mismatch");
-    }
-  });
-
-  it("CLAUDE.md §3 'times out' — a nonce submitted after CHALLENGE_TTL_SECONDS is rejected, not silently honored", () => {
-    const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const issuedAt = Date.now();
-    const { nonce } = store.issue(0.15, issuedAt, "/v1/route/quote");
-
-    const justBeforeTimeout = issuedAt + (CHALLENGE_TTL_SECONDS - 1) * 1000;
-    const justAfterTimeout = issuedAt + (CHALLENGE_TTL_SECONDS + 1) * 1000;
-
-    // Confirm it's genuinely still valid right up to the boundary —
-    // otherwise the "timed out" assertion below wouldn't prove the TTL
-    // is what triggered the rejection.
-    const freshStore = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
-    const fresh = freshStore.issue(0.15, issuedAt, "/v1/route/quote");
-    expect(freshStore.consume(fresh.nonce, 0.15, justBeforeTimeout)).toEqual({ ok: true });
-
-    const result = store.consume(nonce, 0.15, justAfterTimeout);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toMatch(/timed out/);
-      expect(result.code).toBe("challenge_expired");
-    }
+  it("issuing twice for the same inputs is deterministic — no hidden state, no DB write", () => {
+    const store = new ChallengeStore(TEST_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
+    const first = store.issue(0.2, "/v1/compute/rank");
+    const second = store.issue(0.2, "/v1/compute/rank");
+    expect(first).toEqual(second);
   });
 });
 

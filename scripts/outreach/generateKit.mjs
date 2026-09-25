@@ -67,13 +67,17 @@ function mcpSnippet() {
 function x402Snippet() {
   return `# 1. Call it with no credentials at all — real 402 challenge back
 curl -X POST ${BASE_URL}/v1/compute/rank -d '{"gpuClass":"H100"}'
-# -> 402, body includes nonce / payTo / maxAmountRequired / expiresAt
-#    ("resource" in the challenge correctly says /v1/compute/rank)
+# -> 402, body includes real x402 "exact" EVM scheme payment requirements:
+#    payTo / asset (real USDC contract address) / maxAmountRequired (atomic
+#    units) / maxTimeoutSeconds / extra: {name, version} (EIP-712 domain)
+#    ("resource" in the requirements correctly says /v1/compute/rank)
 
-# 2. Sign + submit a real on-chain USDC (Base) transfer proving payment,
-#    resubmit the SAME request with the X-PAYMENT header -> 200
-#    (see scripts/pay-x402-quote.mjs in the ScoutWyze Compute repo for
-#    a full reference implementation of this flow)
+# 2. Sign an EIP-3009 TransferWithAuthorization (EIP-712 typed data) under
+#    that exact domain, resubmit the SAME request with the X-PAYMENT header
+#    -> 200. No on-chain broadcast from you — this server's facilitator
+#    (PayAI) handles that; you only ever sign a message, never send ETH.
+#    (see examples/node-client.mjs or examples/python_client.py in the
+#    ScoutWyze Compute repo for a full, tested reference implementation)
 #
 # No API key. No signup. No card. No human on either end for this path
 # — the agent authenticates itself with a real payment, not a lookup.

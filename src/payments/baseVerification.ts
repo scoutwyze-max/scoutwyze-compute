@@ -1,21 +1,26 @@
 import { ethers } from "ethers";
-import type { X402ErrorCode } from "../api/middleware/x402.js";
+import type { Eip3009Authorization, X402ErrorCode } from "../api/middleware/x402.js";
 
 /**
- * Real cryptographic verification for the x402/Base rail — the piece
- * that was mocked from the start (CLAUDE.md: "the actual on-chain
- * settlement verification is NOT built yet"). Two genuinely separate
- * checks, both real:
+ * Real cryptographic verification for the x402/Base rail. Two
+ * genuinely separate checks, both real:
  *
- * 1. Signature recovery (pure math, no network) — proves whoever
- *    submitted this payment controls a specific private key and
- *    explicitly authorized THIS nonce/amount/txHash, not just any
- *    payment.
+ * 1. EIP-712/EIP-3009 signature recovery (pure math, no network) —
+ *    proves whoever submitted this payment controls the private key
+ *    for `authorization.from` and explicitly authorized this exact
+ *    transfer (to/value/validAfter/validBefore/nonce), not just any
+ *    payment. Domain and typehash independently verified 2026-09-26
+ *    against real on-chain calls to the USDC contract itself (see
+ *    EIP3009_DOMAIN's own comment) — not assumed from the EIP text.
  * 2. On-chain transfer confirmation (a real RPC read) — proves actual
- *    USDC actually moved on Base, from the address the signature
- *    claims, to our real treasury address, for at least the required
- *    amount. Signature alone only proves intent; this proves
- *    settlement.
+ *    USDC actually moved on Base, to our real treasury address, for
+ *    at least the required amount. Signature alone only proves
+ *    intent to authorize; this proves settlement actually happened.
+ *    Kept even though PayAI's /settle call also reports success —
+ *    this server verifies for itself rather than trusting a
+ *    facilitator's claim alone (payments/payAiFacilitator.ts only
+ *    handles the broadcast, which requires a funded relayer wallet
+ *    this server deliberately doesn't run).
  *
  * Real Base USDC contract, verified directly against Circle's own
  * docs + BaseScan (2026-09), NOT from memory: the bridged variant
@@ -27,35 +32,117 @@ export const BASE_USDC_CONTRACT_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA
 const USDC_DECIMALS = 6;
 const TRANSFER_EVENT_ABI = ["event Transfer(address indexed from, address indexed to, uint256 value)"];
 
-export function buildPaymentAuthorizationMessage(params: {
-  nonce: string;
-  amountUsdc: number;
-  txHash: string;
-  network: "base";
-}): string {
-  return [
-    "ScoutWyze Compute Payment Authorization",
-    `nonce: ${params.nonce}`,
-    `amount: ${params.amountUsdc} USDC`,
-    `txHash: ${params.txHash}`,
-    `network: ${params.network}`,
-  ].join("\n");
-}
+/**
+ * EIP-712 domain for Base USDC's EIP-3009 TransferWithAuthorization —
+ * name/version verified 2026-09-26 by calling the real contract's
+ * name()/version() getters on Base mainnet, then independently
+ * re-deriving the domain separator hash from these values and
+ * confirming it byte-for-byte matches the contract's own
+ * DOMAIN_SEPARATOR() return value. The type structure itself
+ * (TransferWithAuthorization(address from,address to,uint256
+ * value,uint256 validAfter,uint256 validBefore,bytes32 nonce)) was
+ * separately confirmed the same way against the contract's own
+ * TRANSFER_WITH_AUTHORIZATION_TYPEHASH() getter — not copied from the
+ * EIP text on faith. Both checks passed exactly; nothing here is
+ * guessed.
+ */
+const EIP3009_DOMAIN = {
+  name: "USD Coin",
+  version: "2",
+  chainId: 8453,
+  verifyingContract: BASE_USDC_CONTRACT_ADDRESS,
+};
 
-export function recoverPayerAddress(
-  message: string,
+const EIP3009_TYPES = {
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+};
+
+export function recoverEip3009Signer(
+  authorization: Eip3009Authorization,
   signature: string,
 ): { valid: true; address: string } | { valid: false; reason: string; code: X402ErrorCode } {
   try {
-    const address = ethers.verifyMessage(message, signature);
+    const value = {
+      from: authorization.from,
+      to: authorization.to,
+      value: BigInt(authorization.value),
+      validAfter: BigInt(authorization.validAfter),
+      validBefore: BigInt(authorization.validBefore),
+      nonce: authorization.nonce,
+    };
+    const address = ethers.verifyTypedData(EIP3009_DOMAIN, EIP3009_TYPES, value, signature);
     return { valid: true, address };
   } catch (err) {
     return {
       valid: false,
-      reason: `signature recovery failed: ${err instanceof Error ? err.message : String(err)}`,
+      reason: `EIP-3009 signature recovery failed: ${err instanceof Error ? err.message : String(err)}`,
       code: "invalid_exact_evm_payload_signature",
     };
   }
+}
+
+/** Pure business-rule checks on an EIP-3009 authorization — no
+ * network, no signature math, just: does this authorize the right
+ * recipient, for enough USDC, within a currently-valid time window.
+ * Deliberately separate from signature recovery so a caller can
+ * order checks (cheapest/most-informative-first) however it wants. */
+export function checkEip3009AuthorizationBounds(
+  authorization: Eip3009Authorization,
+  expectedToAddress: string,
+  minAmountUsd: number,
+  nowSeconds: number,
+): { valid: true } | { valid: false; reason: string; code: X402ErrorCode } {
+  let to: string;
+  let expectedTo: string;
+  try {
+    to = ethers.getAddress(authorization.to);
+    expectedTo = ethers.getAddress(expectedToAddress);
+  } catch {
+    return { valid: false, reason: "malformed address in authorization", code: "invalid_payload" };
+  }
+  if (to.toLowerCase() !== expectedTo.toLowerCase()) {
+    return { valid: false, reason: `authorization.to (${to}) does not match our treasury address`, code: "invalid_exact_evm_payload_recipient_mismatch" };
+  }
+
+  const minAmountRaw = ethers.parseUnits(minAmountUsd.toFixed(USDC_DECIMALS), USDC_DECIMALS);
+  let value: bigint;
+  try {
+    value = BigInt(authorization.value);
+  } catch {
+    return { valid: false, reason: "authorization.value is not a valid integer string", code: "invalid_payload" };
+  }
+  if (value < minAmountRaw) {
+    return {
+      valid: false,
+      reason: `authorization.value (${authorization.value}) below the required ${minAmountRaw.toString()} atomic units`,
+      code: "invalid_exact_evm_payload_authorization_value_mismatch",
+    };
+  }
+
+  const now = BigInt(nowSeconds);
+  let validAfter: bigint;
+  let validBefore: bigint;
+  try {
+    validAfter = BigInt(authorization.validAfter);
+    validBefore = BigInt(authorization.validBefore);
+  } catch {
+    return { valid: false, reason: "validAfter/validBefore are not valid integer strings", code: "invalid_payload" };
+  }
+  if (now < validAfter) {
+    return { valid: false, reason: "authorization is not valid yet (validAfter is in the future)", code: "invalid_exact_evm_payload_authorization_valid_after" };
+  }
+  if (now >= validBefore) {
+    return { valid: false, reason: "authorization has expired (validBefore has passed)", code: "invalid_exact_evm_payload_authorization_valid_before" };
+  }
+
+  return { valid: true };
 }
 
 // The only surface this module actually needs from an ethers Provider

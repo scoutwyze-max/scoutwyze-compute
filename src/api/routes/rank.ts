@@ -5,6 +5,7 @@ import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
 import type { ProcessedEventStore } from "../../payments/processedEvents.js";
 import type { MinimalChainReader } from "../../payments/baseVerification.js";
+import type { MinimalFacilitatorClient } from "../../payments/payAiFacilitator.js";
 import type { ChallengeStore } from "../middleware/x402.js";
 import { computeRequestHash, DEFAULT_ROUTE_PRICE_USDC, buildBazaarBodyExtension } from "../middleware/x402.js";
 import { verifyX402Payment } from "../middleware/auth.js";
@@ -23,6 +24,7 @@ export interface RankRouteDeps {
   challengeStore: ChallengeStore;
   processedEvents: ProcessedEventStore;
   chainReader: MinimalChainReader;
+  facilitator: MinimalFacilitatorClient;
   treasuryAddress: string;
   routePriceUsdc?: number;
   // Real gap closed 2026-09-22 (Robert: "Production path is RunPod
@@ -173,6 +175,7 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
         challengeStore: deps.challengeStore,
         processedEvents: deps.processedEvents,
         chainReader: deps.chainReader,
+        facilitator: deps.facilitator,
         treasuryAddress: deps.treasuryAddress,
         routePriceUsdc,
         resource: "/v1/compute/rank",

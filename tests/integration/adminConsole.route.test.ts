@@ -1,6 +1,6 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { buildTestApp, TEST_ADMIN_SECRET, type TestApp } from "./testApp.js";
-import { createTestPayerWallet, signPaymentAuthorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
+import { createTestPayerWallet, buildEip3009Authorization, signEip3009Authorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
 import { encodeUsdcTransferLog, fakeSuccessfulReceipt } from "../helpers/fakeUsdcTransfer.js";
 
 let txCounter = 0;
@@ -12,16 +12,21 @@ function fakeTxHash(): string {
 
 /** Same pattern as rank.route.test.ts's payAndRank — drives a real
  * challenge -> payment -> paid-request cycle, here just to produce a
- * real settlement row for the admin console's settlements panel. */
+ * real settlement row for the admin console's settlements panel. Forces
+ * a known txHash via the fake facilitator's setNextResult so this test
+ * can assert on the exact resulting settlement row afterward. */
 async function payAndRank(app: TestApp, body: Record<string, unknown> = {}) {
   const challengeRes = await app.app.inject({ method: "POST", url: "/v1/compute/rank", payload: body });
-  const challenge = challengeRes.json().accepts[0];
+  const requirements = challengeRes.json().accepts[0];
   const wallet = createTestPayerWallet();
   const txHash = fakeTxHash();
-  const amountUsdc = Number(challenge.maxAmountRequired);
+  const amountUsdc = Number(requirements.maxAmountRequired) / 1_000_000;
   app.chainReader.setReceipt(txHash, fakeSuccessfulReceipt([encodeUsdcTransferLog(wallet.address, app.treasuryAddress, amountUsdc)]));
-  const signature = await signPaymentAuthorization(wallet, { nonce: challenge.nonce, amountUsdc, txHash });
-  const paymentHeader = encodeX402Payment({ nonce: challenge.nonce, amountUsdc, payerAddress: wallet.address, txHash, signature });
+  app.facilitator.setNextResult({ success: true, transaction: txHash, network: "base", payer: wallet.address });
+
+  const authorization = buildEip3009Authorization({ from: wallet.address, to: app.treasuryAddress, amountUsdc });
+  const signature = await signEip3009Authorization(wallet, authorization);
+  const paymentHeader = encodeX402Payment(authorization, signature);
   const res = await app.app.inject({ method: "POST", url: "/v1/compute/rank", headers: { "x-payment": paymentHeader }, payload: body });
   return { res, txHash, payerAddress: wallet.address };
 }

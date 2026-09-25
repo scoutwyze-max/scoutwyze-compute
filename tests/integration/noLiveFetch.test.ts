@@ -7,7 +7,9 @@ import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
 import { ChallengeStore } from "../../src/api/middleware/x402.js";
 import { ProcessedEventStore } from "../../src/payments/processedEvents.js";
+import { BASE_USDC_CONTRACT_ADDRESS } from "../../src/payments/baseVerification.js";
 import { FakeChainReader } from "../helpers/fakeChainReader.js";
+import { FakeFacilitatorClient } from "../helpers/fakeFacilitator.js";
 import type { ProviderAdapter } from "../../src/providers/types.js";
 import type { ProviderObservedFacts } from "../../src/types/schema.js";
 
@@ -43,9 +45,10 @@ const mockFacts: ProviderObservedFacts = {
 const db = createDatabase(":memory:");
 const apiKeyStore = new ApiKeyStore(db);
 const creditLedger = new CreditLedger(db);
-const challengeStore = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
+const challengeStore = new ChallengeStore(TEST_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
 const processedEvents = new ProcessedEventStore(db);
 const chainReader = new FakeChainReader();
+const facilitator = new FakeFacilitatorClient(chainReader);
 const { rawKey: API_KEY } = apiKeyStore.create("no-live-fetch-test-account");
 creditLedger.topUp("no-live-fetch-test-account", 1000);
 
@@ -78,6 +81,7 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
       challengeStore,
       processedEvents,
       chainReader,
+      facilitator,
       treasuryAddress: TEST_TREASURY_ADDRESS,
       quoteTtlSeconds: 300,
     });
@@ -118,6 +122,7 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
       challengeStore,
       processedEvents,
       chainReader,
+      facilitator,
       treasuryAddress: TEST_TREASURY_ADDRESS,
       quoteTtlSeconds: 300,
     });

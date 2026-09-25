@@ -20,19 +20,24 @@ content, not swallowed or auto-paid — for example:
   "x402Version": 1,
   "error": "payment_required",
   "accepts": [{
-    "scheme": "exact", "network": "base", "maxAmountRequired": "0.15",
+    "scheme": "exact", "network": "base", "maxAmountRequired": "150000",
     "resource": "/v1/compute/rank",
     "payTo": "0xc132a315a05541a4b72c272de539eb86de977fb9",
-    "asset": "USDC", "nonce": "...", "expiresAt": "..."
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "maxTimeoutSeconds": 120,
+    "extra": { "name": "USD Coin", "version": "2" }
   }]
 }
 ```
 
 A wallet-capable **calling agent** — not this server — is responsible
-for signing and submitting the on-chain payment and retrying the same
-tool call with the resulting `X-PAYMENT` proof (see
-`scripts/pay-x402-quote.mjs` in the main repo for a full reference
-implementation of that signing/retry flow). This server's only
+for signing an EIP-3009 `TransferWithAuthorization` (EIP-712 typed
+data, under the exact `extra.name`/`extra.version` domain above — real
+x402 "exact" EVM scheme, no on-chain broadcast from the payer at all;
+this server's own facilitator handles that) and retrying the same tool
+call with the resulting `X-PAYMENT` proof. See `examples/node-client.mjs`
+or `examples/python_client.py` in the main repo for a complete, tested
+reference implementation of that signing flow. This server's only
 credential is an optional prepaid Bearer key.
 
 This isn't a style choice. A "lightweight package anyone can spin up

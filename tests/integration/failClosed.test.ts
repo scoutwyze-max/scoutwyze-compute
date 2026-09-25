@@ -9,7 +9,9 @@ import { ApiKeyStore } from "../../src/billing/apiKeyStore.js";
 import { CreditLedger } from "../../src/billing/creditLedger.js";
 import { ChallengeStore } from "../../src/api/middleware/x402.js";
 import { ProcessedEventStore } from "../../src/payments/processedEvents.js";
+import { BASE_USDC_CONTRACT_ADDRESS } from "../../src/payments/baseVerification.js";
 import { FakeChainReader } from "../helpers/fakeChainReader.js";
+import { FakeFacilitatorClient } from "../helpers/fakeFacilitator.js";
 import type { ProviderAdapter } from "../../src/providers/types.js";
 
 const TEST_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9";
@@ -34,9 +36,10 @@ const brokenCoreweaveAdapter: ProviderAdapter = {
 const db = createDatabase(":memory:");
 const apiKeyStore = new ApiKeyStore(db);
 const creditLedger = new CreditLedger(db);
-const challengeStore = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
+const challengeStore = new ChallengeStore(TEST_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
 const processedEvents = new ProcessedEventStore(db);
 const chainReader = new FakeChainReader();
+const facilitator = new FakeFacilitatorClient(chainReader);
 const { rawKey: API_KEY } = apiKeyStore.create("fail-closed-test-account");
 creditLedger.topUp("fail-closed-test-account", 1000);
 
@@ -51,6 +54,7 @@ async function buildAppWithBrokenCoreweave(): Promise<FastifyInstance> {
     challengeStore,
     processedEvents,
     chainReader,
+    facilitator,
     treasuryAddress: TEST_TREASURY_ADDRESS,
     quoteTtlSeconds: 300,
   });
@@ -119,6 +123,7 @@ describe("CLAUDE.md §2 Fail-Closed Rule", () => {
       challengeStore,
       processedEvents,
       chainReader,
+      facilitator,
       treasuryAddress: TEST_TREASURY_ADDRESS,
       quoteTtlSeconds: 300,
     });

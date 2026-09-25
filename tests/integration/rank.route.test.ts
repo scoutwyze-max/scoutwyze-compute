@@ -1,36 +1,27 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { buildTestApp, type TestApp } from "./testApp.js";
-import { createTestPayerWallet, signPaymentAuthorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
-import { encodeUsdcTransferLog, fakeSuccessfulReceipt } from "../helpers/fakeUsdcTransfer.js";
-
-let txCounter = 0;
-/** Same pattern as auth.middleware.test.ts's own fakeTxHash — real
- * hash FORMAT, not a real on-chain transaction; FakeChainReader is
- * what decides what it "returns". */
-function fakeTxHash(): string {
-  txCounter += 1;
-  return "0x" + txCounter.toString(16).padStart(64, "0");
-}
+import { createTestPayerWallet, buildEip3009Authorization, signEip3009Authorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
 
 /** Drives a real challenge -> payment -> paid-request cycle against
  * /v1/route/rank for a given body — mirrors auth.middleware.test.ts's
- * payAndQuote, adapted to rank's own envelope instead of quote's. */
+ * payAndQuote, adapted to rank's own envelope instead of quote's.
+ * Settlement itself is simulated by the test app's
+ * FakeFacilitatorClient (wired in testApp.ts). */
 async function payAndRank(app: TestApp, body: Record<string, unknown> = {}) {
   const challengeRes = await app.app.inject({ method: "POST", url: "/v1/route/rank", payload: body });
   expect(challengeRes.statusCode).toBe(402);
-  const challenge = challengeRes.json().accepts[0];
+  const requirements = challengeRes.json().accepts[0];
   // Real bug caught live 2026-09-24: resource used to be hardcoded to
   // "/v1/route/quote" on every challenge regardless of which route
   // issued it. Asserted on every payAndRank call, not just once, so it
   // can't quietly regress in one code path and not another.
-  expect(challenge.resource).toBe("/v1/compute/rank");
+  expect(requirements.resource).toBe("/v1/compute/rank");
 
   const wallet = createTestPayerWallet();
-  const txHash = fakeTxHash();
-  const amountUsdc = Number(challenge.maxAmountRequired);
-  app.chainReader.setReceipt(txHash, fakeSuccessfulReceipt([encodeUsdcTransferLog(wallet.address, app.treasuryAddress, amountUsdc)]));
-  const signature = await signPaymentAuthorization(wallet, { nonce: challenge.nonce, amountUsdc, txHash });
-  const paymentHeader = encodeX402Payment({ nonce: challenge.nonce, amountUsdc, payerAddress: wallet.address, txHash, signature });
+  const amountUsdc = Number(requirements.maxAmountRequired) / 1_000_000; // atomic units -> USD
+  const authorization = buildEip3009Authorization({ from: wallet.address, to: app.treasuryAddress, amountUsdc });
+  const signature = await signEip3009Authorization(wallet, authorization);
+  const paymentHeader = encodeX402Payment(authorization, signature);
 
   return app.app.inject({ method: "POST", url: "/v1/route/rank", headers: { "x-payment": paymentHeader }, payload: body });
 }
@@ -49,7 +40,7 @@ describe("POST /v1/route/rank — auth (2026-09-24: dual-rail, x402 extended ont
     expect(res.statusCode).toBe(402);
     const body = res.json();
     expect(body.x402Version).toBe(1);
-    expect(body.accepts?.[0]?.nonce).toBeTruthy();
+    expect(body.accepts?.[0]?.payTo).toBeTruthy();
   });
 
   it("includes a real Bazaar discovery extension, sibling of accepts — not nested inside it", async () => {

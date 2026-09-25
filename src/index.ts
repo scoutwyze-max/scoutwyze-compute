@@ -25,6 +25,8 @@ import { ApiKeyStore } from "./billing/apiKeyStore.js";
 import { CreditLedger } from "./billing/creditLedger.js";
 import { ChallengeStore } from "./api/middleware/x402.js";
 import { ProcessedEventStore } from "./payments/processedEvents.js";
+import { PayAiFacilitatorClient } from "./payments/payAiFacilitator.js";
+import { BASE_USDC_CONTRACT_ADDRESS } from "./payments/baseVerification.js";
 import { StripeCheckoutSessionCreator } from "./payments/stripeCheckout.js";
 import { RequestLogStore } from "./admin/requestLog.js";
 import { AgentLogStore } from "./admin/agentLog.js";
@@ -122,7 +124,14 @@ async function main() {
   } catch {
     logger.error("BASE_TREASURY_ADDRESS is not a valid address — x402 on-chain verification will reject every payment", { value: BASE_TREASURY_ADDRESS });
   }
-  const challengeStore = new ChallengeStore(db, BASE_TREASURY_ADDRESS);
+  const challengeStore = new ChallengeStore(BASE_TREASURY_ADDRESS, BASE_USDC_CONTRACT_ADDRESS);
+  // Settlement facilitator (2026-09-26) — PayAI, genuinely
+  // permissionless for our volume (no API key, no KYB; see
+  // SOT.md's Registry syndication section for the verification behind
+  // this). Broadcasts transferWithAuthorization only; this server
+  // still verifies signature/bounds itself and independently
+  // re-checks the settled transaction on-chain (see auth.ts).
+  const facilitator = new PayAiFacilitatorClient();
 
   // Real gap closed 2026-09-23 (Robert: "live" isn't allowed in public
   // copy until rank actually sources RunPod from RunPod's own live
@@ -152,6 +161,7 @@ async function main() {
     challengeStore,
     processedEvents,
     chainReader,
+    facilitator,
     treasuryAddress: BASE_TREASURY_ADDRESS,
     quoteTtlSeconds: QUOTE_TTL_SECONDS,
     routePriceUsdc: ROUTE_PRICE_USDC,
@@ -179,6 +189,7 @@ async function main() {
     challengeStore,
     processedEvents,
     chainReader,
+    facilitator,
     treasuryAddress: BASE_TREASURY_ADDRESS,
     routePriceUsdc: ROUTE_PRICE_USDC,
     bookableProviders,

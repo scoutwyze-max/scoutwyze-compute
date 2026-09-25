@@ -3,11 +3,12 @@ import type { ApiKeyStore } from "../../billing/apiKeyStore.js";
 import type { CreditLedger } from "../../billing/creditLedger.js";
 import type { ProcessedEventStore } from "../../payments/processedEvents.js";
 import {
-  buildPaymentAuthorizationMessage,
-  recoverPayerAddress,
+  checkEip3009AuthorizationBounds,
+  recoverEip3009Signer,
   verifyOnChainUsdcTransfer,
   type MinimalChainReader,
 } from "../../payments/baseVerification.js";
+import type { MinimalFacilitatorClient } from "../../payments/payAiFacilitator.js";
 import {
   ChallengeStore,
   computeRequestHash,
@@ -17,13 +18,14 @@ import {
   signReceipt,
   verifyReceiptToken,
   type X402ErrorCode,
+  type X402PaymentSubmission,
 } from "./x402.js";
 
 export type AuthRail = "bearer" | "x402";
 
 export interface AuthContext {
   rail: AuthRail;
-  identifier: string; // keyId (bearer) or a receipt/nonce fragment (x402) — never the raw key/payload
+  identifier: string; // keyId (bearer) or a nonce fragment (x402) — never the raw key/payload
 }
 
 declare module "fastify" {
@@ -38,6 +40,7 @@ export interface AuthMiddlewareDeps {
   challengeStore: ChallengeStore;
   processedEvents: ProcessedEventStore;
   chainReader: MinimalChainReader;
+  facilitator: MinimalFacilitatorClient;
   treasuryAddress: string;
   routePriceUsdc?: number;
 }
@@ -46,47 +49,52 @@ export interface X402VerifyDeps {
   challengeStore: ChallengeStore;
   processedEvents: ProcessedEventStore;
   chainReader: MinimalChainReader;
+  facilitator: MinimalFacilitatorClient;
   treasuryAddress: string;
   routePriceUsdc: number;
-  // The real path this challenge is FOR — caught live 2026-09-24 as a
-  // hardcoded-wrong value (see ChallengeStore.issue's own comment);
-  // now every caller must say what it's actually issuing a challenge
-  // for, rather than silently inheriting quote's old hardcoded string.
+  // The real path this challenge is FOR — every caller must say what
+  // it's actually issuing payment requirements for.
   resource: string;
   // Optional Bazaar discovery extension (x402.ts's buildBazaarBodyExtension)
   // — attached at the top level of the 402 response as extensions.bazaar
-  // when present. Omitted entirely (not an empty object) when a caller
-  // doesn't pass one, so a route that hasn't declared one doesn't emit
-  // a misleading empty extensions block.
+  // when present.
   bazaarExtension?: Record<string, unknown>;
 }
 
 /**
- * The x402-specific half of createAuthMiddleware below, extracted
- * 2026-09-24 so rank.ts can accept x402 payments too WITHOUT reusing
- * this file's Bearer branch (which charges the ledger inline, as part
- * of auth — correct for quote's "always charge on successful auth"
- * guarantee, wrong for rank's "debit only if a real match exists"
- * one). Same reasoning as extracting checkAdminSecret in admin.ts:
- * don't duplicate a security-critical verification path across two
- * files, extract the ONE place it's checked instead.
+ * Real x402 "exact" EVM scheme verification — EIP-3009
+ * transferWithAuthorization, not the self-invented broadcast-then-
+ * prove flow this file used before 2026-09-26 (see x402.ts's
+ * top-of-file comment for the full story on why that was a real,
+ * live spec-compliance bug, not a style choice).
  *
- * Real settlement asymmetry, documented not hidden (Robert,
- * 2026-09-24: "the asymmetry is real and unavoidable... documenting
- * this explicit rail-specific behavior is the correct path"): by the
- * time a payment proof reaches this function, real USDC already moved
- * on-chain — there is no way to defer or undo that if a caller's
- * request later turns out to have no match. Bearer can defer its
- * ledger debit until after scoring; x402 cannot defer an
- * already-settled transfer. Callers on the x402 rail pay on successful
- * verification, full stop — same as quote.ts already does, and now
- * also true for rank.ts.
+ * Five checks, in order, cheapest/most-locally-verifiable first:
+ *   1. Decode the payload — real x402 v1 PaymentPayload shape
+ *      (signature + authorization: from/to/value/validAfter/
+ *      validBefore/nonce).
+ *   2. Signature recovers to the claimed `authorization.from` (pure
+ *      math, no network) — proves the claimed payer actually signed
+ *      THIS exact transfer, not just any payment.
+ *   3. Bounds check (no network) — `to` matches our treasury, `value`
+ *      meets the required amount, current time is within
+ *      [validAfter, validBefore).
+ *   4. Settle via PayAI's facilitator (payments/payAiFacilitator.ts)
+ *      — this is the one step requiring a funded relayer wallet,
+ *      which this server deliberately doesn't run itself; PayAI
+ *      broadcasts transferWithAuthorization and reports the result.
+ *      Real settlements flowing through a Bazaar-participating
+ *      facilitator is also what makes this endpoint Bazaar-listed
+ *      (SOT.md §6) — a side effect of this same call, not separate
+ *      work.
+ *   5. Independently re-verify the settled transaction on-chain
+ *      ourselves (verifyOnChainUsdcTransfer, unchanged from before) —
+ *      this server doesn't just trust PayAI's success claim, matching
+ *      the trust-minimized posture everywhere else in this codebase.
  *
  * On success: sets the X-Payment-Receipt response header (same reuse
- * window as quote's existing behavior) and returns {ok:true}. On
- * failure: sends the 402 challenge response itself and returns
- * {ok:false} — callers must return immediately without sending
- * anything else.
+ * window as before) and returns {ok:true}. On failure: sends the 402
+ * response itself and returns {ok:false} — callers must return
+ * immediately without sending anything else.
  */
 export async function verifyX402Payment(
   request: FastifyRequest,
@@ -95,6 +103,7 @@ export async function verifyX402Payment(
   deps: X402VerifyDeps,
 ): Promise<{ ok: true; nonce: string } | { ok: false }> {
   const now = Date.now();
+  const nowSeconds = Math.floor(now / 1000);
 
   const receiptHeader = request.headers["x-payment-receipt"];
   if (typeof receiptHeader === "string" && receiptHeader) {
@@ -111,104 +120,111 @@ export async function verifyX402Payment(
   const submission = decodePaymentHeader(typeof paymentHeader === "string" ? paymentHeader : undefined);
 
   if ("error" in submission) {
-    sendPaymentRequired(reply, deps, now, submission.error, submission.code);
+    sendPaymentRequired(reply, deps, submission.error, submission.code);
     return { ok: false };
   }
 
-  const consumed = deps.challengeStore.consume(submission.nonce, submission.amountUsdc, now);
-  if (!consumed.ok) {
-    sendPaymentRequired(reply, deps, now, consumed.reason, consumed.code);
+  const { authorization, signature } = submission.payload;
+
+  // Check 1: signature proves control of authorization.from over this
+  // EXACT to/value/validAfter/validBefore/nonce.
+  const recovered = recoverEip3009Signer(authorization, signature);
+  if (!recovered.valid) {
+    sendPaymentRequired(reply, deps, recovered.reason, recovered.code);
+    return { ok: false };
+  }
+  if (recovered.address.toLowerCase() !== authorization.from.toLowerCase()) {
+    sendPaymentRequired(reply, deps, "signature does not match authorization.from", "invalid_exact_evm_payload_signature");
     return { ok: false };
   }
 
-  // Check 2: signature proves payerAddress authorized this exact
-  // nonce/amount/txHash.
-  const message = buildPaymentAuthorizationMessage({
-    nonce: submission.nonce,
-    amountUsdc: submission.amountUsdc,
-    txHash: submission.txHash,
-    network: "base",
-  });
-  const recovered = recoverPayerAddress(message, submission.signature);
-  if (!recovered.valid || recovered.address.toLowerCase() !== submission.payerAddress.toLowerCase()) {
-    sendPaymentRequired(
-      reply,
-      deps,
-      now,
-      !recovered.valid ? recovered.reason : "signature does not match claimed payerAddress",
-      "invalid_exact_evm_payload_signature",
-    );
+  // Check 2: to/value/time bounds — no network needed.
+  const bounds = checkEip3009AuthorizationBounds(authorization, deps.treasuryAddress, deps.routePriceUsdc, nowSeconds);
+  if (!bounds.valid) {
+    sendPaymentRequired(reply, deps, bounds.reason, bounds.code);
     return { ok: false };
   }
 
-  // Check 2.5: this exact on-chain payment hasn't already been used to
-  // authorize a DIFFERENT request — the nonce alone doesn't prevent
-  // reusing one real transfer against many nonces.
-  const txAlreadyUsed = deps.processedEvents.isProcessed(submission.txHash);
-  if (txAlreadyUsed) {
-    sendPaymentRequired(
-      reply,
-      deps,
-      now,
-      "this transaction has already been used to authorize a different payment",
-      "invalid_transaction_state",
-    );
+  // Check 3: settle via PayAI — broadcasts transferWithAuthorization.
+  // Their own duplicate_settlement detection (backed by the USDC
+  // contract's on-chain authorizationState mapping) is what actually
+  // prevents this exact authorization being spent twice; we don't
+  // duplicate that check ourselves.
+  const paymentRequirements = deps.challengeStore.issue(deps.routePriceUsdc, deps.resource);
+  const settleResult = await deps.facilitator.settle(submission, paymentRequirements);
+  if (!settleResult.success) {
+    const code: X402ErrorCode = isKnownX402ErrorCode(settleResult.errorReason) ? settleResult.errorReason : "unexpected_verify_error";
+    sendPaymentRequired(reply, deps, settleResult.errorMessage ?? "settlement failed", code);
     return { ok: false };
   }
 
-  // Check 3: the transfer actually happened on-chain, to us, for
-  // enough USDC.
-  const onChain = await verifyOnChainUsdcTransfer(
-    deps.chainReader,
-    submission.txHash,
-    submission.payerAddress,
-    deps.treasuryAddress,
-    submission.amountUsdc,
-  );
+  // Check 4: this exact settled transaction hasn't already been used
+  // to grant a DIFFERENT request on our side (defense in depth beyond
+  // what PayAI/the chain already guarantee).
+  if (deps.processedEvents.isProcessed(settleResult.transaction)) {
+    sendPaymentRequired(reply, deps, "this transaction has already been used to authorize a different payment", "duplicate_settlement");
+    return { ok: false };
+  }
+
+  // Check 5: independently confirm the transfer on-chain ourselves —
+  // don't just trust PayAI's success claim.
+  const onChain = await verifyOnChainUsdcTransfer(deps.chainReader, settleResult.transaction, authorization.from, deps.treasuryAddress, deps.routePriceUsdc);
   if (!onChain.valid) {
-    sendPaymentRequired(reply, deps, now, onChain.reason, onChain.code);
+    sendPaymentRequired(reply, deps, onChain.reason, onChain.code);
     return { ok: false };
   }
 
-  deps.processedEvents.recordIfNew(submission.txHash, "base_onchain", submission.payerAddress, submission.amountUsdc);
+  deps.processedEvents.recordIfNew(settleResult.transaction, "base_onchain", authorization.from, deps.routePriceUsdc);
 
   const receipt = signReceipt({
     requestHash,
-    nonce: submission.nonce,
+    nonce: authorization.nonce,
     issuedAtMs: now,
     expiresAtMs: now + RECEIPT_TTL_SECONDS * 1000,
   });
   reply.header("X-Payment-Receipt", receipt);
-  return { ok: true, nonce: submission.nonce };
+  return { ok: true, nonce: authorization.nonce };
+}
+
+const KNOWN_X402_ERROR_CODES = new Set<X402ErrorCode>([
+  "invalid_payload",
+  "invalid_exact_evm_payload_signature",
+  "invalid_exact_evm_payload_authorization_value_mismatch",
+  "invalid_exact_evm_payload_authorization_valid_after",
+  "invalid_exact_evm_payload_authorization_valid_before",
+  "invalid_exact_evm_payload_recipient_mismatch",
+  "invalid_transaction_state",
+  "unexpected_verify_error",
+  "invalid_payment_requirements",
+  "invalid_network",
+  "invalid_scheme",
+  "insufficient_funds",
+  "insufficient_balance",
+  "invalid_exact_evm_missing_eip712_domain",
+  "invalid_exact_evm_insufficient_balance",
+  "missing_fee_payer",
+  "missing_facilitator_address",
+  "fee_payer_not_managed_by_facilitator",
+  "facilitator_address_not_managed_by_facilitator",
+  "internal_server_error",
+  "settlement_pending",
+  "duplicate_settlement",
+  "upto_channel_capacity_exhausted",
+  "service_unavailable",
+]);
+
+// PayAI's errorReason is a free-form string per their own schema ("Handle
+// unknown values"), not a closed enum — this guards against a future
+// undocumented code leaking through as if it were one of ours.
+function isKnownX402ErrorCode(value: string | undefined): value is X402ErrorCode {
+  return typeof value === "string" && KNOWN_X402_ERROR_CODES.has(value as X402ErrorCode);
 }
 
 /**
  * CLAUDE.md §4 Dual-Rail — Bearer API keys (real, hashed, prepaid-
  * credit-backed) OR x402/USDC (machine-native), either sufficient.
- *
- * Primary Path (Bearer): unchanged from the credit-ledger pass — see
- * that commit for the full writeup.
- *
- * Secondary Path (x402): now REAL settlement verification, not mocked.
- * Three independent checks, all must pass:
- *   1. Nonce is real, unused, unexpired (ChallengeStore, unchanged).
- *   2. The submitted signature recovers to the claimed payerAddress
- *      over a canonical message binding nonce+amount+txHash+network —
- *      proves the claimed payer actually authorized THIS payment, not
- *      just any payment (baseVerification.ts, real ECDSA recovery).
- *   3. That exact txHash is a real, successful, on-chain USDC Transfer
- *      on Base from payerAddress to OUR treasury address for at least
- *      the required amount (a real RPC read) — AND that txHash hasn't
- *      already been used to authorize a different request (real
- *      transfers can be reused against multiple nonces otherwise,
- *      since the nonce alone only protects the challenge, not the
- *      underlying payment proof).
- * Order matters: nonce is consumed FIRST (existing atomic pattern) —
- * if the later, async checks fail, that nonce is burned and the client
- * must request a fresh challenge. Acceptable V1 tradeoff: it keeps the
- * single-use property enforced by one atomic DB transaction rather
- * than needing a check-then-async-then-consume dance that would open
- * its own race window.
+ * Primary Path (Bearer) unchanged. Secondary Path (x402) delegates to
+ * verifyX402Payment above.
  */
 export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
   const routePriceUsdc = deps.routePriceUsdc ?? DEFAULT_ROUTE_PRICE_USDC;
@@ -249,35 +265,33 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
       challengeStore: deps.challengeStore,
       processedEvents: deps.processedEvents,
       chainReader: deps.chainReader,
+      facilitator: deps.facilitator,
       treasuryAddress: deps.treasuryAddress,
       routePriceUsdc,
       resource: "/v1/route/quote",
     });
     if (result.ok) {
-      request.authContext = { rail: "x402", identifier: result.nonce.slice(0, 8) };
+      request.authContext = { rail: "x402", identifier: result.nonce.slice(0, 10) };
     }
     // On failure, verifyX402Payment already sent the 402 response.
   };
 }
 
-function sendPaymentRequired(reply: FastifyReply, deps: X402VerifyDeps, now: number, reason?: string, code?: X402ErrorCode): void {
-  const challenge = deps.challengeStore.issue(deps.routePriceUsdc, now, deps.resource);
+function sendPaymentRequired(reply: FastifyReply, deps: X402VerifyDeps, reason?: string, code?: X402ErrorCode): void {
+  const requirements = deps.challengeStore.issue(deps.routePriceUsdc, deps.resource);
   reply.code(402).send({
     x402Version: 1,
     error: "payment_required",
     reason: reason ?? "no valid Authorization: Bearer <api_key> or X-PAYMENT header provided",
-    // Machine-parseable companion to `reason` (2026-09-25) — real x402
-    // spec v2 §9 vocabulary where this failure maps onto it, a clearly
-    // non-spec ScoutWyze-specific code where it's our own added
-    // challenge/nonce layer (see X402ErrorCode's own doc comment).
-    // Omitted (not null) on the very first, no-header-at-all challenge
-    // — that's an initial offer, not a rejected attempt, so there's no
-    // failure to code.
+    // Machine-parseable companion to `reason` — omitted (not null) on
+    // the very first, no-header-at-all challenge, since that's an
+    // initial offer, not a rejected attempt.
     ...(code ? { code } : {}),
-    accepts: [challenge],
+    accepts: [requirements],
     // Sibling of accepts, not nested inside it - verified against the
-    // real x402-foundation PaymentRequired type (x402.ts's
-    // buildBazaarBodyExtension doc comment has the full citation).
+    // real x402-foundation PaymentRequired type.
     ...(deps.bazaarExtension ? { extensions: { bazaar: deps.bazaarExtension } } : {}),
   });
 }
+
+export type { X402PaymentSubmission };

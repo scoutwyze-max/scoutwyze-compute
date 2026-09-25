@@ -3,6 +3,18 @@
 Live: https://scoutwyze-compute.fly.dev
 Single machine by design (SQLite + in-process worker) — `fly.toml`'s own header comment explains why; do not scale to >1 machine without re-architecting storage first.
 
+**2026-09-26 architecture note:** the x402 payment flow described in
+"4. 402" below (self-broadcast + EIP-191 message proof,
+`scripts/pay-x402-quote.mjs` + `scripts/sign-message.html`) was a real,
+working, tested implementation as of 2026-09-24 — but not spec-compliant
+with the actual x402 "exact" EVM scheme, which real client tooling
+expects. It was replaced 2026-09-26 with the real EIP-3009
+`TransferWithAuthorization` scheme, settled through PayAI's facilitator;
+both scripts referenced below have been deleted. See `SOT.md` §4 for
+the current, accurate flow and `examples/` for working reference
+clients. The rest of this section is kept as a historical record of
+what was true on 2026-09-24, not a claim about current behavior.
+
 ## Pre-flight (re-audited 2026-09-24 — see note below on why "confirmed" isn't automatically trusted anymore)
 - [x] `GET /healthz` — 200, worker running, all 3 providers `ok`
 - [x] Fly secrets set: `ADMIN_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `BASE_RPC_URL`, `X402_RECEIPT_SIGNING_SECRET`, `RUNPOD_API_KEY`. `LAMBDA_API_KEY`/`LAMBDA_SSH_KEY_NAME` (dead — Lambda booker is never instantiated, production is RunPod-only) and `BASE_TREASURY_WALLET_ADDRESS` (dead — code reads `BASE_TREASURY_ADDRESS` from `fly.toml` instead) were all deleted 2026-09-24; no code referenced any of the three.

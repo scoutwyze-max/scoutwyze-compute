@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { buildTestApp, type TestApp } from "./testApp.js";
-import { createTestPayerWallet, signPaymentAuthorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
-import { encodeUsdcTransferLog, fakeSuccessfulReceipt, fakeFailedReceipt } from "../helpers/fakeUsdcTransfer.js";
+import { createTestPayerWallet, buildEip3009Authorization, signEip3009Authorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
+import { encodeUsdcTransferLog, fakeFailedReceipt } from "../helpers/fakeUsdcTransfer.js";
 
 let built: TestApp | undefined;
 
@@ -11,38 +11,30 @@ afterEach(async () => {
 });
 
 let txCounter = 0;
-/** A fresh, never-reused-looking fake tx hash per call — real hash
- * FORMAT (0x + 64 hex chars), but not a real on-chain transaction;
- * FakeChainReader is what decides what it "returns". */
 function fakeTxHash(): string {
   txCounter += 1;
   return "0x" + txCounter.toString(16).padStart(64, "0");
 }
 
-/** Builds a real-shaped X-PAYMENT header: a genuine EIP-191 signature
- * from a genuine (test) wallet over the exact canonical message
- * auth.ts recomputes and checks. When `fundOnChain` is true (default),
- * also configures the test app's FakeChainReader with a genuinely
- * ABI-encoded USDC Transfer log so verifyOnChainUsdcTransfer actually
- * succeeds — tests targeting a rejection path that fires BEFORE the
- * on-chain check (bad nonce, amount too low) don't need real funding. */
+/** Builds a real-shaped X-PAYMENT header: a genuine EIP-712/EIP-3009
+ * signature from a genuine (test) wallet, authorizing the exact
+ * to/value auth.ts will check. Settlement itself is simulated by the
+ * test app's FakeFacilitatorClient (wired in testApp.ts) — this
+ * helper only produces the client-side payload, exactly what a real
+ * x402 client library would send. */
 async function buildPayment(
   app: TestApp,
-  params: { nonce: string; amountUsdc: number },
-  opts: { fundOnChain?: boolean; wallet?: ReturnType<typeof createTestPayerWallet>; toAddress?: string } = {},
+  params: { amountUsdc: number; to?: string },
+  opts: { wallet?: ReturnType<typeof createTestPayerWallet> } = {},
 ): Promise<string> {
   const wallet = opts.wallet ?? createTestPayerWallet();
-  const txHash = fakeTxHash();
-  if (opts.fundOnChain !== false) {
-    app.chainReader.setReceipt(
-      txHash,
-      fakeSuccessfulReceipt([
-        encodeUsdcTransferLog(wallet.address, opts.toAddress ?? app.treasuryAddress, params.amountUsdc),
-      ]),
-    );
-  }
-  const signature = await signPaymentAuthorization(wallet, { nonce: params.nonce, amountUsdc: params.amountUsdc, txHash });
-  return encodeX402Payment({ nonce: params.nonce, amountUsdc: params.amountUsdc, payerAddress: wallet.address, txHash, signature });
+  const authorization = buildEip3009Authorization({
+    from: wallet.address,
+    to: params.to ?? app.treasuryAddress,
+    amountUsdc: params.amountUsdc,
+  });
+  const signature = await signEip3009Authorization(wallet, authorization);
+  return encodeX402Payment(authorization, signature);
 }
 
 /** Drives the real challenge -> payment -> receipt cycle for a given
@@ -50,9 +42,9 @@ async function buildPayment(
 async function payAndQuote(app: TestApp, body: Record<string, unknown> = {}) {
   const challengeRes = await app.app.inject({ method: "POST", url: "/v1/route/quote", payload: body });
   expect(challengeRes.statusCode).toBe(402);
-  const challenge = challengeRes.json().accepts[0];
+  const requirements = challengeRes.json().accepts[0];
 
-  const payment = await buildPayment(app, { nonce: challenge.nonce, amountUsdc: Number(challenge.maxAmountRequired) });
+  const payment = await buildPayment(app, { amountUsdc: Number(requirements.maxAmountRequired) / 1_000_000 });
   const paidRes = await app.app.inject({
     method: "POST",
     url: "/v1/route/quote",
@@ -89,7 +81,7 @@ describe("dual-rail auth — Primary Path (Bearer)", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(402);
-    expect(res.json().accepts[0].nonce).toBeTruthy();
+    expect(res.json().accepts[0].payTo).toBeTruthy();
   });
 
   it("VALIDATE-BEFORE-BILL — a malformed request with NO auth returns 400, not a 402 challenge", async () => {
@@ -99,7 +91,7 @@ describe("dual-rail auth — Primary Path (Bearer)", () => {
     // provoke (and on the credit rail, pay for) the auth machinery
     // before ever being rejected. validateQuoteRequest.ts now runs
     // first; this confirms a malformed body never even reaches the
-    // point where a challenge nonce would be issued.
+    // point where payment requirements would be issued.
     built = await buildTestApp();
     const res = await built.app.inject({
       method: "POST",
@@ -111,28 +103,33 @@ describe("dual-rail auth — Primary Path (Bearer)", () => {
   });
 });
 
-describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
-  it("no credentials at all returns a real 402 challenge with a usable nonce, real treasury payTo, and price in CLAUDE.md's $0.10-$0.25+ range", async () => {
+describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4 — real EIP-3009 exact scheme, 2026-09-26 rewrite", () => {
+  it("no credentials at all returns a real 402 with spec-compliant requirements — atomic-unit amount, real payTo, real USDC contract address", async () => {
     built = await buildTestApp();
     const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", payload: {} });
 
     expect(res.statusCode).toBe(402);
     const body = res.json();
     expect(body.x402Version).toBe(1);
-    const challenge = body.accepts[0];
-    expect(challenge.scheme).toBe("exact");
-    expect(challenge.network).toBe("base");
-    expect(challenge.nonce).toBeTruthy();
-    expect(challenge.payTo).toBe(built.treasuryAddress);
-    expect(Number(challenge.maxAmountRequired)).toBeGreaterThanOrEqual(0.1);
+    const requirements = body.accepts[0];
+    expect(requirements.scheme).toBe("exact");
+    expect(requirements.network).toBe("base");
+    expect(requirements.payTo).toBe(built.treasuryAddress);
+    // Real x402 spec: atomic units (USDC has 6 decimals), not a human
+    // decimal string — a real compliance bug caught and fixed
+    // 2026-09-26. CLAUDE.md's $0.10-$0.25+ range, expressed in atomic
+    // units: 100000-250000+.
+    expect(Number(requirements.maxAmountRequired)).toBeGreaterThanOrEqual(100_000);
+    expect(requirements.maxTimeoutSeconds).toBeGreaterThan(0);
+    expect(requirements.asset).toMatch(/^0x[a-fA-F0-9]{40}$/); // real contract address, not the string "USDC"
     // Real bug caught live 2026-09-24 while extending x402 onto
     // compute/rank: resource used to be hardcoded regardless of which
     // route issued the challenge. Asserted here on quote's side too,
     // so a future regression can't silently break either route.
-    expect(challenge.resource).toBe("/v1/route/quote");
+    expect(requirements.resource).toBe("/v1/route/quote");
   });
 
-  it("a payment with a real signature and a real on-chain-confirmed USDC transfer succeeds and returns a signed receipt header", async () => {
+  it("a payment with a real EIP-3009 signature, settled and independently re-verified on-chain, succeeds and returns a signed receipt header", async () => {
     built = await buildTestApp();
     const { paidRes, receipt } = await payAndQuote(built, {});
     expect(paidRes.statusCode).toBe(200);
@@ -140,191 +137,164 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     expect(receipt).toMatch(/^[\w-]+\.[0-9a-f]{64}$/); // base64url payload . hex hmac
   });
 
-  it("a payment with a made-up nonce (never issued by this server) is rejected, not silently accepted", async () => {
+  it("REPLAY PROTECTION — settling the same authorization (from+nonce) twice is rejected the second time", async () => {
     built = await buildTestApp();
-    const payment = await buildPayment(built, { nonce: "totally-made-up-nonce", amountUsdc: 0.15 }, { fundOnChain: false });
-    const res = await built.app.inject({
-      method: "POST",
-      url: "/v1/route/quote",
-      headers: { "x-payment": payment },
-      payload: {},
-    });
-    expect(res.statusCode).toBe(402);
-    expect(res.json().reason).toMatch(/unknown or already-expired/);
-    expect(res.json().code).toBe("unknown_challenge");
+    const wallet = createTestPayerWallet();
+    const authorization = buildEip3009Authorization({ from: wallet.address, to: built.treasuryAddress, amountUsdc: 0.15 });
+    const signature = await signEip3009Authorization(wallet, authorization);
+    const payment = encodeX402Payment(authorization, signature);
+
+    const first = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
+    expect(first.statusCode).toBe(200);
+
+    // Exact same authorization+signature submitted again — this is
+    // what PayAI's own duplicate_settlement detection (backed by the
+    // USDC contract's on-chain authorizationState) actually catches.
+    const replay = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
+    expect(replay.statusCode).toBe(402);
+    expect(replay.json().code).toBe("duplicate_settlement");
   });
 
-  it("REPLAY PROTECTION — reusing the same nonce for a second payment is rejected", async () => {
+  it("DEFENSE IN DEPTH — if a facilitator ever reported the same settled txHash for two different authorizations, this server's own idempotency check still catches it", async () => {
     built = await buildTestApp();
+    const sharedTxHash = fakeTxHash();
+    const wallet = createTestPayerWallet();
+    built.chainReader.setReceipt(sharedTxHash, {
+      status: 1,
+      logs: [encodeUsdcTransferLog(wallet.address, built.treasuryAddress, 0.15)],
+    });
 
-    const challengeRes = await built.app.inject({ method: "POST", url: "/v1/route/quote", payload: {} });
-    const { nonce, maxAmountRequired } = challengeRes.json().accepts[0];
-    const amountUsdc = Number(maxAmountRequired);
-
-    const firstPayment = await buildPayment(built, { nonce, amountUsdc });
+    // First authorization settles to the shared txHash (forced via
+    // setNextResult, simulating an edge case the real facilitator
+    // itself is supposed to prevent — this test is about OUR
+    // defense-in-depth, not re-testing PayAI's own guarantee).
+    built.facilitator.setNextResult({ success: true, transaction: sharedTxHash, network: "base", payer: wallet.address });
     const first = await built.app.inject({
       method: "POST",
       url: "/v1/route/quote",
-      headers: { "x-payment": firstPayment },
+      headers: { "x-payment": await buildPayment(built, { amountUsdc: 0.15 }, { wallet }) },
       payload: {},
     });
     expect(first.statusCode).toBe(200);
 
-    // Same nonce again (fresh wallet/txHash — proves the nonce itself
-    // is what's rejected, not incidentally the same tx being reused).
-    const replayPayment = await buildPayment(built, { nonce, amountUsdc });
-    const replay = await built.app.inject({
+    // A second, DIFFERENT authorization that the (broken/malicious)
+    // facilitator claims settled to the SAME txHash.
+    built.facilitator.setNextResult({ success: true, transaction: sharedTxHash, network: "base", payer: wallet.address });
+    const second = await built.app.inject({
       method: "POST",
       url: "/v1/route/quote",
-      headers: { "x-payment": replayPayment },
+      headers: { "x-payment": await buildPayment(built, { amountUsdc: 0.15 }, { wallet }) },
       payload: {},
     });
-    expect(replay.statusCode).toBe(402);
-    expect(replay.json().reason).toMatch(/already used.*replay/i);
-    expect(replay.json().code).toBe("challenge_already_used");
+    expect(second.statusCode).toBe(402);
+    expect(second.json().reason).toMatch(/already been used to authorize a different payment/);
+    expect(second.json().code).toBe("duplicate_settlement");
   });
 
-  it("TX REUSE — a real transfer already used to authorize one nonce cannot authorize a different nonce", async () => {
+  it("rejects a payment whose signature does not recover to the claimed authorization.from", async () => {
     built = await buildTestApp();
-    const wallet = createTestPayerWallet();
-
-    // First payment — fully real and funded, succeeds.
-    const first = await payAndQuote(built, {});
-    expect(first.paidRes.statusCode).toBe(200);
-
-    // Grab a fresh challenge, but sign a payment that claims the SAME
-    // txHash the first payment already used — re-derive the exact
-    // txHash by re-running buildPayment isn't possible after the fact,
-    // so instead we manufacture the reuse directly: issue a second
-    // challenge, then submit a payment whose txHash is pre-registered
-    // in processedEvents via a real first payment against a KNOWN hash.
-    const challengeRes = await built.app.inject({ method: "POST", url: "/v1/route/quote", payload: {} });
-    const { nonce, maxAmountRequired } = challengeRes.json().accepts[0];
-    const amountUsdc = Number(maxAmountRequired);
-    const sharedTxHash = fakeTxHash();
-    built.chainReader.setReceipt(
-      sharedTxHash,
-      fakeSuccessfulReceipt([encodeUsdcTransferLog(wallet.address, built.treasuryAddress, amountUsdc)]),
-    );
-    // Mark this txHash as already processed against some other nonce —
-    // exactly what a real first use would have done.
-    built.processedEvents.recordIfNew(sharedTxHash, "base_onchain", wallet.address, amountUsdc);
-
-    const signature = await signPaymentAuthorization(wallet, { nonce, amountUsdc, txHash: sharedTxHash });
-    const payment = encodeX402Payment({ nonce, amountUsdc, payerAddress: wallet.address, txHash: sharedTxHash, signature });
-
-    const res = await built.app.inject({
-      method: "POST",
-      url: "/v1/route/quote",
-      headers: { "x-payment": payment },
-      payload: {},
-    });
-    expect(res.statusCode).toBe(402);
-    expect(res.json().reason).toMatch(/already been used to authorize a different payment/);
-    expect(res.json().code).toBe("invalid_transaction_state");
-  });
-
-  it("rejects a payment whose signature does not recover to the claimed payerAddress", async () => {
-    built = await buildTestApp();
-    const challengeRes = await built.app.inject({ method: "POST", url: "/v1/route/quote", payload: {} });
-    const { nonce, maxAmountRequired } = challengeRes.json().accepts[0];
-    const amountUsdc = Number(maxAmountRequired);
-
     const signer = createTestPayerWallet();
-    const impersonated = createTestPayerWallet(); // a different wallet than the one that actually signed
-    const txHash = fakeTxHash();
-    built.chainReader.setReceipt(
-      txHash,
-      fakeSuccessfulReceipt([encodeUsdcTransferLog(impersonated.address, built.treasuryAddress, amountUsdc)]),
-    );
-    const signature = await signPaymentAuthorization(signer, { nonce, amountUsdc, txHash });
-    const payment = encodeX402Payment({ nonce, amountUsdc, payerAddress: impersonated.address, txHash, signature });
+    const impersonated = createTestPayerWallet(); // authorization CLAIMS this address, but signer actually signed it
+    const authorization = buildEip3009Authorization({ from: impersonated.address, to: built.treasuryAddress, amountUsdc: 0.15 });
+    const signature = await signEip3009Authorization(signer, authorization);
+    const payment = encodeX402Payment(authorization, signature);
 
-    const res = await built.app.inject({
-      method: "POST",
-      url: "/v1/route/quote",
-      headers: { "x-payment": payment },
-      payload: {},
-    });
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
     expect(res.statusCode).toBe(402);
-    expect(res.json().reason).toMatch(/signature does not match claimed payerAddress/);
+    expect(res.json().reason).toMatch(/signature does not match authorization\.from/);
     expect(res.json().code).toBe("invalid_exact_evm_payload_signature");
   });
 
-  it("rejects a payment whose on-chain transaction failed/reverted", async () => {
+  it("rejects a payment whose settlement reverted/failed on-chain, even though the facilitator claimed success", async () => {
     built = await buildTestApp();
-    const challengeRes = await built.app.inject({ method: "POST", url: "/v1/route/quote", payload: {} });
-    const { nonce, maxAmountRequired } = challengeRes.json().accepts[0];
-    const amountUsdc = Number(maxAmountRequired);
-
     const wallet = createTestPayerWallet();
     const txHash = fakeTxHash();
-    built.chainReader.setReceipt(
-      txHash,
-      fakeFailedReceipt([encodeUsdcTransferLog(wallet.address, built.treasuryAddress, amountUsdc)]),
-    );
-    const signature = await signPaymentAuthorization(wallet, { nonce, amountUsdc, txHash });
-    const payment = encodeX402Payment({ nonce, amountUsdc, payerAddress: wallet.address, txHash, signature });
+    built.chainReader.setReceipt(txHash, fakeFailedReceipt([encodeUsdcTransferLog(wallet.address, built.treasuryAddress, 0.15)]));
+    built.facilitator.setNextResult({ success: true, transaction: txHash, network: "base", payer: wallet.address });
 
-    const res = await built.app.inject({
-      method: "POST",
-      url: "/v1/route/quote",
-      headers: { "x-payment": payment },
-      payload: {},
-    });
+    const payment = await buildPayment(built, { amountUsdc: 0.15 }, { wallet });
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/failed\/reverted/);
     expect(res.json().code).toBe("invalid_transaction_state");
   });
 
-  it("rejects a payment whose real transfer sent USDC to the wrong address (not our treasury)", async () => {
+  it("rejects a facilitator settlement failure, passing through PayAI's real error vocabulary", async () => {
     built = await buildTestApp();
-    const challengeRes = await built.app.inject({ method: "POST", url: "/v1/route/quote", payload: {} });
-    const { nonce, maxAmountRequired } = challengeRes.json().accepts[0];
-    const amountUsdc = Number(maxAmountRequired);
+    built.facilitator.setNextResult({ success: false, transaction: "", network: "base", errorReason: "insufficient_funds", errorMessage: "payer wallet balance too low" });
 
-    const wallet = createTestPayerWallet();
-    const notOurTreasury = createTestPayerWallet().address;
-    const payment = await buildPayment(built, { nonce, amountUsdc }, { wallet, toAddress: notOurTreasury });
-
-    const res = await built.app.inject({
-      method: "POST",
-      url: "/v1/route/quote",
-      headers: { "x-payment": payment },
-      payload: {},
-    });
+    const payment = await buildPayment(built, { amountUsdc: 0.15 });
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
     expect(res.statusCode).toBe(402);
-    expect(res.json().reason).toMatch(/no matching USDC Transfer found/);
-    expect(res.json().code).toBe("invalid_payload");
+    expect(res.json().reason).toBe("payer wallet balance too low");
+    expect(res.json().code).toBe("insufficient_funds");
   });
 
-  it("rejects a payment amount below the challenge's required minimum", async () => {
+  it("an unrecognized/malformed facilitator error code doesn't leak through as if it were a known one", async () => {
     built = await buildTestApp();
-    const challengeRes = await built.app.inject({ method: "POST", url: "/v1/route/quote", payload: {} });
-    const { nonce } = challengeRes.json().accepts[0];
+    built.facilitator.setNextResult({ success: false, transaction: "", network: "base", errorReason: "some_future_code_this_server_has_never_seen" });
 
-    const payment = await buildPayment(built, { nonce, amountUsdc: 0.01 }, { fundOnChain: false });
-    const res = await built.app.inject({
-      method: "POST",
-      url: "/v1/route/quote",
-      headers: { "x-payment": payment },
-      payload: {},
-    });
+    const payment = await buildPayment(built, { amountUsdc: 0.15 });
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("unexpected_verify_error");
+  });
+
+  it("rejects a payment whose real transfer sent USDC to the wrong address (not our treasury) — checked BEFORE ever calling the facilitator", async () => {
+    built = await buildTestApp();
+    const notOurTreasury = createTestPayerWallet().address;
+    const payment = await buildPayment(built, { amountUsdc: 0.15, to: notOurTreasury });
+
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().reason).toMatch(/does not match our treasury address/);
+    expect(res.json().code).toBe("invalid_exact_evm_payload_recipient_mismatch");
+  });
+
+  it("rejects a payment amount below the required minimum — checked BEFORE ever calling the facilitator", async () => {
+    built = await buildTestApp();
+    const payment = await buildPayment(built, { amountUsdc: 0.01 });
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/below the required/);
     expect(res.json().code).toBe("invalid_exact_evm_payload_authorization_value_mismatch");
   });
 
+  it("rejects an authorization that's already expired (validBefore in the past)", async () => {
+    built = await buildTestApp();
+    const wallet = createTestPayerWallet();
+    const authorization = buildEip3009Authorization({
+      from: wallet.address,
+      to: built.treasuryAddress,
+      amountUsdc: 0.15,
+      validAfterOffsetSeconds: -3600,
+      validBeforeOffsetSeconds: -60,
+    });
+    const signature = await signEip3009Authorization(wallet, authorization);
+    const payment = encodeX402Payment(authorization, signature);
+
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("invalid_exact_evm_payload_authorization_valid_before");
+  });
+
   it("rejects a payment on the wrong network", async () => {
     built = await buildTestApp();
     const submission = {
+      x402Version: 1,
       scheme: "exact",
       network: "ethereum",
-      nonce: "irrelevant",
-      amountUsdc: 0.15,
-      payerAddress: "0x0000000000000000000000000000000000dEaD",
-      txHash: fakeTxHash(),
-      signature: "0xnotarealsignature",
+      payload: {
+        signature: "0xnotarealsignature",
+        authorization: {
+          from: "0x0000000000000000000000000000000000dEaD",
+          to: built.treasuryAddress,
+          value: "150000",
+          validAfter: "0",
+          validBefore: "9999999999",
+          nonce: "0x" + "11".repeat(32),
+        },
+      },
     };
     const res = await built.app.inject({
       method: "POST",

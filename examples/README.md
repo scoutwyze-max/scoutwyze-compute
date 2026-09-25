@@ -12,34 +12,43 @@ prepaid Bearer key, or x402/USDC-on-Base with zero signup.
   `StructuredTool` (`pip install langchain-core eth_account`), for
   dropping into an existing LangChain agent's toolset.
 
+## The x402 rail is the real "exact" EVM scheme (2026-09-26)
+
+An earlier version of these clients had the payer broadcast their own
+on-chain USDC transfer and prove it after the fact — a real, working,
+but non-spec-compliant flow that no standard x402 client library
+speaks. As of 2026-09-26 this is the real scheme (EIP-3009
+`TransferWithAuthorization`, EIP-712 typed-data signature): the payer
+only ever **signs a message**. No RPC connection, no ETH for gas, no
+on-chain broadcast from the client at all — this server's own
+facilitator (PayAI) broadcasts the settlement and pays gas.
+
 ## What's actually verified here, and what isn't
 
-Real verification, not just "it imports cleanly" — done this session,
-2026-09-25:
+Real verification, not just "it imports cleanly":
 
-- **Bearer rail** — all three clients (Node, Python, and the LangChain
-  tool wrapping Python) called the live dev server end-to-end and got
-  correct, correctly-shaped, correctly-zero-charged responses.
-- **x402 message construction + signing** — verified the Node client's
-  signature round-trips through `ethers.verifyMessage` (the exact
-  function the server uses) to the right address; verified the same
-  for the Python client's `eth_account`-generated signature; then
-  cross-checked that a **Python-generated signature is correctly
-  recovered by the server's own Node/ethers verification function** —
-  real interop proof, not an assumption that "both implement EIP-191
-  correctly."
-- **x402 real on-chain broadcast — NOT verified live.** No funded
-  Base wallet or local test chain (Anvil/Hardhat) was available this
-  session to actually send a transaction and watch the server accept
-  it end-to-end. The transaction-building and signing steps were
-  checked in isolation (correct `eth_account.SignedTransaction`
-  attributes, correct unprefixed hex from `.raw_transaction.hex()`,
-  correct ERC20 `transfer` selector verified via real keccak
-  computation, correct Base chain ID verified via a live
-  `eth_chainId` RPC call) — but nobody has watched a real transfer
-  from these specific client files clear and get accepted by
-  `/v1/compute/rank`. Treat that specific path as implemented-but-
-  unconfirmed until someone runs it with real funds.
+- **Bearer rail** — all three clients called the live dev server
+  end-to-end and got correct, correctly-shaped, correctly-zero-charged
+  responses.
+- **EIP-3009 domain and typehash** — independently confirmed against
+  real on-chain calls to the USDC contract on Base (`name()`,
+  `version()`, `DOMAIN_SEPARATOR()`, `TRANSFER_WITH_AUTHORIZATION_TYPEHASH()`),
+  not copied from the EIP text on faith.
+- **Full pipeline, both languages, against the real production
+  dependency (PayAI's live facilitator, not a mock)** — both
+  `node-client.mjs` and `python_client.py` were run against this
+  server's real `/settle` call to `facilitator.payai.network`. First
+  attempt surfaced a real, undocumented requirement
+  (`invalid_exact_evm_missing_eip712_domain` — PayAI needs the token's
+  EIP-712 domain name/version explicitly advertised in the payment
+  requirements' `extra` field, not just inferred); after fixing that
+  server-side, both clients got back `invalid_exact_evm_insufficient_balance`
+  for an unfunded test wallet — confirming the entire chain (signature
+  construction, requirements shape, PayAI request/response parsing,
+  error-code mapping) works correctly end to end.
+- **Real on-chain broadcast with actual funds** — see `SOT.md` §4 for
+  whether this has been run to full completion; check there rather
+  than trusting a claim in this file, since it can go stale.
 
 ## Which rail should I use?
 
@@ -47,7 +56,8 @@ Real verification, not just "it imports cleanly" — done this session,
   account system, secrets manager, etc.)? **Bearer** — one-time human
   signup + Stripe funding, then headless.
 - A fully autonomous agent with its own wallet and no human in the
-  loop at all, ever? **x402** — no signup, no key, pays per call.
+  loop at all, ever? **x402** — no signup, no key, no ETH needed, pays
+  per call.
 
 See `SOT.md` §4/§5 in the repo root for the full settle-before-grant
 asymmetry between the two rails before choosing.
