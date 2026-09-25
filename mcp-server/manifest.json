@@ -1,0 +1,75 @@
+{
+  "manifest_version": "0.3",
+  "name": "scoutwyze-compute-mcp",
+  "display_name": "ScoutWyze Compute",
+  "version": "0.1.1",
+  "description": "Ranks current RunPod GPU offers by price and freshness. Supports x402/USDC-on-Base payments.",
+  "long_description": "Stateless MCP server wrapping ScoutWyze Compute's GPU-offer-ranking API. Two tools: scoutwyze_sample (free, anonymous preview) and scoutwyze_rank (ranks GPU offers for a workload, billed per successful match). Holds no private key and never signs or settles an x402 payment itself — an unauthenticated scoutwyze_rank call returns the real 402 payment challenge as tool content for a wallet-capable calling agent to settle.",
+  "author": {
+    "name": "ScoutWyze",
+    "url": "https://scoutwyze-compute.fly.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scoutwyze-max/scoutwyze-compute.git"
+  },
+  "homepage": "https://scoutwyze-compute.fly.dev",
+  "documentation": "https://github.com/scoutwyze-max/scoutwyze-compute/blob/main/mcp-server/README.md",
+  "support": "https://github.com/scoutwyze-max/scoutwyze-compute/issues",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "SCOUTWYZE_API_KEY": "${user_config.api_key}",
+        "SCOUTWYZE_BASE_URL": "${user_config.base_url}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "scoutwyze_sample",
+      "description": "Free, anonymous, rate-limited preview of a real ranked GPU offer. No arguments, never billed."
+    },
+    {
+      "name": "scoutwyze_rank",
+      "description": "Ranks current RunPod GPU offers by price and freshness for a given workload. Billed per successful match."
+    }
+  ],
+  "tools_generated": false,
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gpu",
+    "compute",
+    "x402",
+    "scoutwyze",
+    "runpod",
+    "ai-agent"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "ScoutWyze API Key",
+      "description": "Optional prepaid Bearer key from POST /v1/signup + POST /v1/checkout-sessions. Omit to run unauthenticated — scoutwyze_rank will then return a real x402 payment challenge instead of ranked results.",
+      "sensitive": true,
+      "required": false
+    },
+    "base_url": {
+      "type": "string",
+      "title": "API Base URL",
+      "description": "Overrides the default API base URL (https://scoutwyze-compute.fly.dev) — for local development only.",
+      "sensitive": false,
+      "required": false
+    }
+  }
+}

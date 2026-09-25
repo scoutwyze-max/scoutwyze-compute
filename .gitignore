@@ -13,3 +13,8 @@ data/
 # third-party repos. Not committed by default; a human decides what
 # (if anything) leaves this machine.
 scripts/outreach/kits/
+
+# Generated MCPB bundle build artifacts (mcp-server/scripts/build-mcpb.sh) —
+# like dist/, rebuilt on demand, not committed.
+mcp-server/.mcpb-stage/
+*.mcpb

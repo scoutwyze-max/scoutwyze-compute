@@ -116,14 +116,39 @@ npm run dev     # runs directly from src/ via tsx, no build step
 directory (`prepublishOnly` runs the build automatically, so `dist/`
 is always fresh — never publish a stale build by hand-running
 `npm run build` first and trusting it's still current). After
-publishing to npm, also bump `version` in `server.json` to match and
-re-run `mcp-publisher publish server.json`, or the two registries will
-disagree about the current version.
+publishing to npm, also bump `version` in **both** `server.json`
+(official MCP Registry) and `manifest.json` (MCPB bundle, below) to
+match, and re-run `mcp-publisher publish server.json` — three separate
+version strings that don't cross-check each other, easy for one to
+drift silently otherwise.
 
 `tsc` does not preserve or set the executable bit on its output, so
 `dist/index.js` comes out of a plain `npm run build` as `644` — not
 runnable via `bin`. The `postbuild` script (`chmod +x dist/index.js`)
 fixes this on every build; don't remove it.
+
+## MCPB bundle (Smithery, Claude Desktop single-click install)
+
+`manifest.json` is a real MCPB manifest (github.com/modelcontextprotocol/mcpb,
+`manifest_version: "0.3"`) — a *different* file from `server.json`
+(the official MCP Registry's own manifest format; the two are
+unrelated specs with overlapping-sounding names). `npm run build:mcpb`
+stages a clean directory (`dist/`, `manifest.json`,
+production-only `node_modules`, `package.json` — none of the repo's
+own `src/`, tests, `Dockerfile`, or `server.json`) and packs it into
+`scoutwyze-compute-mcp.mcpb` via the real `mcpb` CLI (`@anthropic-ai/mcpb`,
+a local devDependency). The output `.mcpb` file is gitignored and
+rebuilt on demand, same as `dist/`.
+
+This is what Smithery's stdio publish path expects
+(`smithery mcp publish ./scoutwyze-compute-mcp.mcpb -n <org>/<name>`,
+per smithery.ai/docs/build/publish — verified against their live docs
+2026-09-25, not the older `smithery.yaml` convention some example
+repos still show) — requires a one-time `smithery auth login` (GitHub
+OAuth, a human/browser step) before the CLI can publish; not
+scriptable end-to-end without that. The same `.mcpb` file also works
+for Claude Desktop's single-click local install (drag the file onto
+the app).
 
 ## Other rules this server follows, not just documents
 
