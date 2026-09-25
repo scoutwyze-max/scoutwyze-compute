@@ -109,5 +109,27 @@ export function createDatabase(filePath: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_agent_log_created ON agent_log(created_at);
   `);
 
+  migrateRequestLogRailColumns(db);
+
   return db;
+}
+
+/**
+ * 2026-09-25 — request_log predates the rail/identifier columns
+ * (added for the admin console's per-request rail visibility). SQLite
+ * has no `ADD COLUMN IF NOT EXISTS`, and this table already has real
+ * rows on the deployed volume, so CREATE TABLE IF NOT EXISTS alone
+ * won't backfill it — check PRAGMA table_info and ALTER only if
+ * missing, so this stays safe to run against both a fresh DB (columns
+ * already absent, added once) and the existing production file.
+ */
+function migrateRequestLogRailColumns(db: Database.Database): void {
+  const columns = db.prepare(`PRAGMA table_info(request_log)`).all() as { name: string }[];
+  const names = new Set(columns.map((c) => c.name));
+  if (!names.has("rail")) {
+    db.exec(`ALTER TABLE request_log ADD COLUMN rail TEXT CHECK (rail IN ('bearer','x402'))`);
+  }
+  if (!names.has("identifier")) {
+    db.exec(`ALTER TABLE request_log ADD COLUMN identifier TEXT`);
+  }
 }

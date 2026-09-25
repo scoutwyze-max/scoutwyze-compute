@@ -1,5 +1,30 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { buildTestApp, TEST_ADMIN_SECRET, type TestApp } from "./testApp.js";
+import { createTestPayerWallet, signPaymentAuthorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
+import { encodeUsdcTransferLog, fakeSuccessfulReceipt } from "../helpers/fakeUsdcTransfer.js";
+
+let txCounter = 0;
+/** Same pattern as rank.route.test.ts's own fakeTxHash. */
+function fakeTxHash(): string {
+  txCounter += 1;
+  return "0x" + txCounter.toString(16).padStart(64, "0");
+}
+
+/** Same pattern as rank.route.test.ts's payAndRank — drives a real
+ * challenge -> payment -> paid-request cycle, here just to produce a
+ * real settlement row for the admin console's settlements panel. */
+async function payAndRank(app: TestApp, body: Record<string, unknown> = {}) {
+  const challengeRes = await app.app.inject({ method: "POST", url: "/v1/compute/rank", payload: body });
+  const challenge = challengeRes.json().accepts[0];
+  const wallet = createTestPayerWallet();
+  const txHash = fakeTxHash();
+  const amountUsdc = Number(challenge.maxAmountRequired);
+  app.chainReader.setReceipt(txHash, fakeSuccessfulReceipt([encodeUsdcTransferLog(wallet.address, app.treasuryAddress, amountUsdc)]));
+  const signature = await signPaymentAuthorization(wallet, { nonce: challenge.nonce, amountUsdc, txHash });
+  const paymentHeader = encodeX402Payment({ nonce: challenge.nonce, amountUsdc, payerAddress: wallet.address, txHash, signature });
+  const res = await app.app.inject({ method: "POST", url: "/v1/compute/rank", headers: { "x-payment": paymentHeader }, payload: body });
+  return { res, txHash, payerAddress: wallet.address };
+}
 
 let built: TestApp | undefined;
 
@@ -179,5 +204,76 @@ describe("Agent feed + outreach trigger — fixed action, no free-text, in-fligh
     // be accepted — the guard shouldn't wedge itself into "forever busy".
     const third = await built.app.inject({ method: "POST", url: "/v1/admin/console/agent-runs/outreach", headers: { cookie } });
     expect(third.statusCode).toBe(202);
+
+    // Drain it before the test (and afterEach's db close) ends — a real
+    // bug caught live 2026-09-25 by later tests in this file running
+    // long enough to expose it: left running, this process's completion
+    // callback fires after `built.app.close()` and throws trying to
+    // write to agentLog on an already-closed connection.
+    await sleep(400);
+  });
+});
+
+describe("GET /v1/admin/console/requests — rail-aware, real requests not placeholders", () => {
+  it("401s without a session cookie", async () => {
+    built = await buildTestApp();
+    const res = await built.app.inject({ method: "GET", url: "/v1/admin/console/requests" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("logs a real Bearer rank call with rail+identifier, and an anonymous sample call with rail=null", async () => {
+    built = await buildTestApp();
+    const cookie = await login(built);
+
+    await built.app.inject({ method: "POST", url: "/v1/compute/rank", headers: { authorization: `Bearer ${built.apiKey}` }, payload: { gpuClass: "H100" } });
+    await built.app.inject({ method: "GET", url: "/v1/compute/sample" });
+
+    const res = await built.app.inject({ method: "GET", url: "/v1/admin/console/requests", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const requests = res.json().requests as { route: string; rail: string | null; identifier: string | null; statusCode: number }[];
+
+    const rankReq = requests.find((r) => r.route === "compute_rank");
+    expect(rankReq?.rail).toBe("bearer");
+    expect(rankReq?.identifier).toBeTruthy();
+    expect(rankReq?.statusCode).toBe(200);
+
+    const sampleReq = requests.find((r) => r.route === "compute_sample");
+    expect(sampleReq?.rail).toBeNull();
+  });
+
+  it("logs the x402 rail with a nonce-fragment identifier, never the raw payload", async () => {
+    built = await buildTestApp();
+    const cookie = await login(built);
+
+    const { res: rankRes } = await payAndRank(built, { gpuClass: "H100" });
+    expect(rankRes.statusCode).toBe(200);
+
+    const res = await built.app.inject({ method: "GET", url: "/v1/admin/console/requests", headers: { cookie } });
+    const rankReq = res.json().requests.find((r: { route: string }) => r.route === "compute_rank");
+    expect(rankReq.rail).toBe("x402");
+    expect(rankReq.identifier).toHaveLength(8); // nonce.slice(0, 8), not the full nonce/payload
+  });
+});
+
+describe("GET /v1/admin/console/settlements — real on-chain Base settlements", () => {
+  it("401s without a session cookie", async () => {
+    built = await buildTestApp();
+    const res = await built.app.inject({ method: "GET", url: "/v1/admin/console/settlements" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("reflects a real x402 payment's tx hash, payer address, and amount — same data recordIfNew already persists", async () => {
+    built = await buildTestApp();
+    const cookie = await login(built);
+
+    const { res: rankRes, txHash, payerAddress } = await payAndRank(built, { gpuClass: "H100" });
+    expect(rankRes.statusCode).toBe(200);
+
+    const res = await built.app.inject({ method: "GET", url: "/v1/admin/console/settlements", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const settlement = res.json().settlements.find((s: { txHash: string }) => s.txHash === txHash);
+    expect(settlement).toBeTruthy();
+    expect(settlement.payerAddress.toLowerCase()).toBe(payerAddress.toLowerCase());
+    expect(settlement.amountUsd).toBeCloseTo(0.15, 5);
   });
 });

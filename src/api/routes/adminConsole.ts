@@ -23,6 +23,8 @@ const RECENT_LEDGER_LIMIT = 25;
 const RECENT_PURCHASES_LIMIT = 25;
 const RECENT_BALANCES_LIMIT = 25;
 const AGENT_LOG_LIMIT = 100;
+const RECENT_SETTLEMENTS_LIMIT = 25;
+const RECENT_REQUESTS_LIMIT = 50;
 
 /**
  * Backend for the admin console (SOT.md-adjacent internal tool, not a
@@ -77,6 +79,23 @@ export function registerAdminConsoleRoutes(app: FastifyInstance, deps: AdminCons
       (route) => byRoute.get(route) ?? { route, count: 0, errorCount: 0, avgLatencyMs: null, lastRequestAt: null },
     );
     return reply.code(200).send({ windowHours: OVERVIEW_WINDOW_HOURS, routes });
+  });
+
+  // Real on-chain x402/USDC settlements on Base (2026-09-25) — pure
+  // exposure of data already durably recorded by verifyX402Payment's
+  // recordIfNew() call in auth.ts; nothing new is captured here, this
+  // just reads it back. txHash is the real Base tx hash, safe to link
+  // straight to BaseScan client-side.
+  app.get("/v1/admin/console/settlements", { preHandler: requireSession }, async (_request, reply) => {
+    return reply.code(200).send({ settlements: deps.processedEvents.recentBaseSettlements(RECENT_SETTLEMENTS_LIMIT) });
+  });
+
+  // Raw per-request rows (2026-09-25), rail-aware — unlike /telemetry
+  // above (aggregated counts per route), this is one row per request
+  // so the console can show scoutwyze_rank vs scoutwyze_sample traffic
+  // side by side with which rail (bearer/x402) served each one.
+  app.get("/v1/admin/console/requests", { preHandler: requireSession }, async (_request, reply) => {
+    return reply.code(200).send({ requests: deps.requestLog.recent(RECENT_REQUESTS_LIMIT) });
   });
 
   app.get("/v1/admin/console/agent-log", { preHandler: requireSession }, async (_request, reply) => {

@@ -40,6 +40,9 @@ function baseStyles(): string {
   .pill { display: inline-block; padding: 1px 7px; border-radius: 100px; font-size: 10.5px; }
   .pill.charge { background: #2a1515; color: #f87171; }
   .pill.topup { background: #142a1a; color: #4ade80; }
+  .pill.bearer { background: #14202a; color: #60a5fa; }
+  .pill.x402 { background: #221a2a; color: #c084fc; }
+  .mono { font-family: inherit; }
   .feed { background: #111113; border: 1px solid #26262b; border-radius: 8px; padding: 12px 14px; max-height: 280px; overflow-y: auto; font-size: 12px; line-height: 1.7; }
   .feed .line { color: #a1a1aa; }
   .feed .line .t { color: #52525b; margin-right: 8px; }
@@ -132,6 +135,18 @@ function dashboardHtml(): string {
     </section>
 
     <section>
+      <h2>Base on-chain settlements (x402 / USDC)</h2>
+      <table><thead><tr><th>Tx hash</th><th>Payer</th><th>Amount</th><th>When</th></tr></thead>
+      <tbody id="settlementRows"></tbody></table>
+    </section>
+
+    <section>
+      <h2>Recent requests</h2>
+      <table><thead><tr><th>Route</th><th>Rail</th><th>Identifier</th><th>Status</th><th>Latency</th><th>When</th></tr></thead>
+      <tbody id="requestRows"></tbody></table>
+    </section>
+
+    <section>
       <h2>Agent feed</h2>
       <div class="feed" id="agentFeed"></div>
       <div style="height:10px"></div>
@@ -182,6 +197,27 @@ function dashboardHtml(): string {
       \`).join('');
     }
 
+    const shortHash = (h) => h.length > 14 ? h.slice(0, 8) + '…' + h.slice(-6) : h;
+    const shortAddr = (a) => a && a.length > 12 ? a.slice(0, 6) + '…' + a.slice(-4) : (a || '–');
+
+    async function loadSettlements() {
+      const d = await api('/v1/admin/console/settlements');
+      $('settlementRows').innerHTML = d.settlements.map((s) => \`
+        <tr><td><a href="https://basescan.org/tx/\${s.txHash}" target="_blank" rel="noopener" class="mono">\${shortHash(s.txHash)}</a></td>
+        <td class="mono">\${shortAddr(s.payerAddress)}</td><td>\${usd(s.amountUsd)}</td><td>\${when(s.processedAt)}</td></tr>
+      \`).join('') || '<tr><td colspan="4" class="sub">No on-chain settlements yet.</td></tr>';
+    }
+
+    async function loadRequests() {
+      const d = await api('/v1/admin/console/requests');
+      $('requestRows').innerHTML = d.requests.map((r) => \`
+        <tr><td>\${r.route}</td>
+        <td>\${r.rail ? \`<span class="pill \${r.rail}">\${r.rail}</span>\` : '<span class="sub">–</span>'}</td>
+        <td class="mono">\${r.identifier || '–'}</td>
+        <td>\${r.statusCode}</td><td>\${r.latencyMs}ms</td><td>\${when(r.createdAt)}</td></tr>
+      \`).join('') || '<tr><td colspan="6" class="sub">No requests logged yet.</td></tr>';
+    }
+
     async function loadAgentFeed() {
       const d = await api('/v1/admin/console/agent-log');
       $('agentFeed').innerHTML = d.entries.map((e) => \`
@@ -206,7 +242,7 @@ function dashboardHtml(): string {
     $('runOutreachBtn').addEventListener('click', runOutreach);
     $('logoutBtn').addEventListener('click', async () => { await fetch('/v1/admin/session/logout', { method: 'POST' }); location.reload(); });
 
-    function refreshAll() { loadOverview(); loadTelemetry(); loadAgentFeed(); }
+    function refreshAll() { loadOverview(); loadTelemetry(); loadSettlements(); loadRequests(); loadAgentFeed(); }
     refreshAll();
     setInterval(refreshAll, 8000);
   </script>

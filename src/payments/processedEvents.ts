@@ -65,4 +65,21 @@ export class ProcessedEventStore {
       .all(limit);
     return rows.map((r) => ({ eventId: r.event_id, accountId: r.account_id, amountUsd: r.amount_usd_cents / 100, processedAt: r.processed_at }));
   }
+
+  /** Admin console — real on-chain x402/USDC settlements on Base,
+   * newest first. event_id IS the real Base tx hash (recordIfNew's
+   * eventId param for the base_onchain source, see verifyX402Payment
+   * in auth.ts) — not a synthetic ID, safe to link straight to
+   * BaseScan. account_id holds the payer's wallet address for this
+   * source (there's no ScoutWyze ledger account on the x402 rail —
+   * the column is shared with Stripe's real account_id, named for the
+   * common case, not renamed per-source). */
+  recentBaseSettlements(limit: number): { txHash: string; payerAddress: string; amountUsd: number; processedAt: string }[] {
+    const rows = this.db
+      .prepare<[number], { event_id: string; account_id: string; amount_usd_cents: number; processed_at: string }>(
+        `SELECT event_id, account_id, amount_usd_cents, processed_at FROM processed_payment_events WHERE source = 'base_onchain' ORDER BY processed_at DESC LIMIT ?`,
+      )
+      .all(limit);
+    return rows.map((r) => ({ txHash: r.event_id, payerAddress: r.account_id, amountUsd: r.amount_usd_cents / 100, processedAt: r.processed_at }));
+  }
 }

@@ -8,6 +8,7 @@ import type Database from "better-sqlite3";
  * wide request log (see db/connection.ts's own comment on this table).
  */
 export type LoggedRoute = "compute_sample" | "compute_rank";
+export type LoggedRail = "bearer" | "x402";
 
 export interface RouteTelemetry {
   route: LoggedRoute;
@@ -25,13 +26,59 @@ interface TelemetryRow {
   last_at: string | null;
 }
 
+// identifier mirrors AuthContext.identifier (auth.ts) — keyId for
+// bearer, a nonce fragment for x402, null for sample's anonymous rail.
+export interface LoggedRequest {
+  id: string;
+  route: LoggedRoute;
+  rail: LoggedRail | null;
+  identifier: string | null;
+  statusCode: number;
+  latencyMs: number;
+  createdAt: string;
+}
+
+interface RequestRow {
+  id: string;
+  route: LoggedRoute;
+  rail: LoggedRail | null;
+  identifier: string | null;
+  status_code: number;
+  latency_ms: number;
+  created_at: string;
+}
+
+function rowToRequest(row: RequestRow): LoggedRequest {
+  return {
+    id: row.id,
+    route: row.route,
+    rail: row.rail,
+    identifier: row.identifier,
+    statusCode: row.status_code,
+    latencyMs: row.latency_ms,
+    createdAt: row.created_at,
+  };
+}
+
 export class RequestLogStore {
   constructor(private readonly db: Database.Database) {}
 
-  record(route: LoggedRoute, statusCode: number, latencyMs: number): void {
+  record(route: LoggedRoute, statusCode: number, latencyMs: number, rail: LoggedRail | null = null, identifier: string | null = null): void {
     this.db
-      .prepare(`INSERT INTO request_log (id, route, status_code, latency_ms, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(randomUUID(), route, statusCode, latencyMs, new Date().toISOString());
+      .prepare(
+        `INSERT INTO request_log (id, route, status_code, latency_ms, rail, identifier, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(randomUUID(), route, statusCode, latencyMs, rail, identifier, new Date().toISOString());
+  }
+
+  /** Admin console — raw per-request rows, newest first, for the
+   * "recent requests" panel (route + rail side by side per row, unlike
+   * getTelemetrySince's aggregated counts). */
+  recent(limit: number): LoggedRequest[] {
+    const rows = this.db
+      .prepare<[number], RequestRow>(`SELECT * FROM request_log ORDER BY created_at DESC LIMIT ?`)
+      .all(limit);
+    return rows.map(rowToRequest);
   }
 
   /** Aggregated per-route stats since `sinceIso` — one row per route

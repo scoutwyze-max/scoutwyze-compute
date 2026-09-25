@@ -162,6 +162,10 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
       }
       rail = "bearer";
       accountId = keyRecord.accountId;
+      // Admin console request log (2026-09-25) — mirrors what
+      // createAuthMiddleware already sets for quote.ts; rank.ts does
+      // its own dual-rail handling inline so it has to set this too.
+      request.authContext = { rail, identifier: keyRecord.keyId };
     } else {
       // No Authorization header, malformed, or an unrecognized/revoked
       // key — all fall through to x402 as a genuine alternative rail.
@@ -176,6 +180,7 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
       });
       if (!x402Result.ok) return; // verifyX402Payment already sent the 402 challenge
       rail = "x402";
+      request.authContext = { rail, identifier: x402Result.nonce.slice(0, 8) };
     }
 
     const result = filterAndScore(parsedBody.data, deps.cache.getStates(), { allowedProviders: deps.bookableProviders });
