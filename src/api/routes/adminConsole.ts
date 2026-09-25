@@ -58,6 +58,10 @@ export function registerAdminConsoleRoutes(app: FastifyInstance, deps: AdminCons
 
     return reply.code(200).send({
       activeApiKeys: deps.apiKeyStore.countActive(),
+      // Real customers, not raw key count — see countFundedAccounts's
+      // own doc comment for why these two numbers can legitimately
+      // diverge a lot (dev/test keys are "active" with zero balance).
+      fundedAccounts: deps.creditLedger.countFundedAccounts(),
       revenue24hUsd: chargeTotal24hUsd,
       // Same total as revenue24hUsd, expressed as a rate — see
       // getChargeTotalSince's own doc comment for why these share one

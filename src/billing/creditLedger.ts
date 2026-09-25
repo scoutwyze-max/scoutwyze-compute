@@ -178,6 +178,19 @@ export class CreditLedger {
     return (row?.total ?? 0) / 100;
   }
 
+  /** Admin console KPI (2026-09-25) — accounts with a real, spendable
+   * balance, distinct from ApiKeyStore.countActive()'s raw key count.
+   * A key becomes "active" the moment it's issued, before any Stripe
+   * topup — countActive() alone conflates dev/test keys created with
+   * zero balance with real funded customers, overstating traction.
+   * This counts accounts, not keys, since one account can hold several
+   * keys; "how many distinct customers have money on the table" is the
+   * question this answers. */
+  countFundedAccounts(): number {
+    const row = this.db.prepare<[], { count: number }>(`SELECT COUNT(*) as count FROM accounts WHERE balance_usd_cents > 0`).get();
+    return row?.count ?? 0;
+  }
+
   /** Admin console — every account's current balance, highest first. */
   getAllBalances(limit: number): { accountId: string; balanceUsd: number }[] {
     const rows = this.db

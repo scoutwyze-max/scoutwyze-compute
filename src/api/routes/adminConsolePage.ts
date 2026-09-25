@@ -172,6 +172,7 @@ function dashboardHtml(): string {
       const d = await api('/v1/admin/console/overview');
       $('kpis').innerHTML = [
         ['Active API keys', d.activeApiKeys],
+        ['Funded accounts', d.fundedAccounts],
         ['24h revenue', usd(d.revenue24hUsd)],
         ['Burn rate', usd(d.burnRatePerHourUsd) + '/hr'],
       ].map(([label, value]) => \`<div class="card"><div class="label">\${label}</div><div class="value">\${value}</div></div>\`).join('');

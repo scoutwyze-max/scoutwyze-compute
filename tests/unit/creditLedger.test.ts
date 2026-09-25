@@ -90,4 +90,13 @@ describe("CreditLedger", () => {
     ledger.topUp("acct-1", 0.2); // classic 0.1 + 0.2 !== 0.3 floating point trap
     expect(ledger.getBalance("acct-1")).toBe(0.3);
   });
+
+  it("countFundedAccounts counts only accounts with a positive balance, not every account ever created", () => {
+    const ledger = new CreditLedger(db);
+    ledger.topUp("acct-funded-1", 10);
+    ledger.topUp("acct-funded-2", 5);
+    ledger.topUp("acct-drained", 1);
+    ledger.charge("acct-drained", 1, "h1"); // spent down to exactly 0 — no longer "funded"
+    expect(ledger.countFundedAccounts()).toBe(2);
+  });
 });

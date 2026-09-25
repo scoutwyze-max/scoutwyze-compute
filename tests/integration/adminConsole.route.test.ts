@@ -138,6 +138,7 @@ describe("GET /v1/admin/console/overview — real data, not placeholders", () =>
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.activeApiKeys).toBeGreaterThanOrEqual(1);
+    expect(body.fundedAccounts).toBeGreaterThanOrEqual(1);
     expect(body.revenue24hUsd).toBeCloseTo(0.15, 5);
     // Rounded to cents by the route itself (a display value, not a raw
     // ratio) — 0.15/24 = 0.00625/hr rounds to $0.01/hr.
