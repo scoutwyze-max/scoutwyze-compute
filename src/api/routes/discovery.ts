@@ -36,6 +36,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
       "## Auth — two rails, both work on /v1/compute/rank as of 2026-09-24",
       "Rail 1, prepaid Bearer (works on /v1/compute/rank, /v1/route/quote): `Authorization: Bearer sw_live_...`. Get a key: POST /v1/signup (free, human step). Fund it: POST /v1/checkout-sessions (real Stripe Checkout, human step, $10 minimum). Once funded, an agent calls the API with the key — no further human involvement until the balance runs out. Debit is deferred until AFTER scoring — a no_match/no_inventory result is never charged.",
       "Rail 2, x402 / USDC on Base (works on /v1/compute/rank AND /v1/route/quote): an unauthenticated request returns HTTP 402 with a real payment challenge (nonce, payTo, maxAmountRequired). Pay it with a signed on-chain USDC transfer on Base, resubmit with the `X-PAYMENT` header, get a 200. No API key, no signup, no card, ever. IMPORTANT asymmetry: unlike the Bearer rail, x402 settles on successful payment verification BEFORE scoring runs — real USDC has already moved by the time a no_match/no_inventory result is known, and there is no refund path for it. Every response's billing.rail field tells you which guarantee applied.",
+      "On a REJECTED payment attempt (bad signature, expired/reused nonce, insufficient amount, already-used tx), the 402 body includes a machine-parseable `code` field alongside the human-readable `reason` — real x402 spec v2 §9 vocabulary (invalid_payload, invalid_exact_evm_payload_signature, invalid_exact_evm_payload_authorization_value_mismatch, invalid_transaction_state, unexpected_verify_error) where the failure maps onto it, or one of three ScoutWyze-specific codes for our own pre-issued challenge/nonce layer (unknown_challenge, challenge_already_used, challenge_expired) where it doesn't — that layer is our own addition, not part of the base spec. `code` is a stable identifier to branch retry logic on; `reason` may change wording. `code` is absent on the very first, no-payment-submitted-yet challenge (not a failure, just the initial offer).",
       "",
       "## Endpoints",
       "- GET /v1/compute/sample (alias: /v1/route/sample) — anonymous, no key, fixed query, rate-limited, never billed on either rail. Try before you pay.",
@@ -103,7 +104,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
             "200": {
               description: "Frozen envelope: {status, schema_version: \"1.0\", coverage, recommended, alternatives, limits, billing}. status: ok | no_match | no_inventory. billing.rail is \"bearer\" or \"x402\" — the two rails settle differently: Bearer defers its ledger debit until AFTER scoring (no_match is never charged); x402 settles on successful payment verification BEFORE scoring (a no_match result is still billable:true on x402 — real USDC already moved on-chain, with no refund path). On ok: recommended + alternatives, each with observed_at, freshness_seconds, source (live_api|fixture), availability_status (provider-reported, nullable), classification (\"provider_reported\"). limits is always {not_reserved: true, not_provisioned: true, can_provision: false} — this endpoint never executes anything.",
             },
-            "402": { description: "insufficient credits (recognized Bearer key, zero balance — no x402 fallback attempted in this specific case) OR a real x402 payment challenge (missing/unrecognized Bearer key)" },
+            "402": { description: "insufficient credits (recognized Bearer key, zero balance — no x402 fallback attempted in this specific case) OR a real x402 payment challenge (missing/unrecognized Bearer key). On a rejected payment attempt (not the initial challenge), body includes a machine-parseable `code` field alongside `reason` — see /llms.txt's Auth section for the full vocabulary." },
           },
         },
       },
@@ -112,7 +113,7 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
           summary: "Same underlying rank data, dual-rail auth: Bearer key OR native x402/USDC-on-Base payment. Response uses the older provider_observed/scoutwyze_estimated/metadata schema, not the compute/rank envelope.",
           responses: {
             "200": { description: "provider_observed (raw provider facts) / scoutwyze_estimated (computed cost + risk) / metadata (ttl, confidence, request_id) — CLAUDE.md's original provenance-split schema." },
-            "402": { description: "Payment Required — no valid Bearer key and no valid X-PAYMENT header. Body includes a real x402 challenge: nonce, payTo, maxAmountRequired (USDC), expiresAt." },
+            "402": { description: "Payment Required — no valid Bearer key and no valid X-PAYMENT header. Body includes a real x402 challenge: nonce, payTo, maxAmountRequired (USDC), expiresAt. On a rejected payment attempt (not the initial challenge), body includes a machine-parseable `code` field alongside `reason` — see /llms.txt's Auth section for the full vocabulary." },
           },
         },
       },

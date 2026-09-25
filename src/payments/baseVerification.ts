@@ -1,4 +1,5 @@
 import { ethers } from "ethers";
+import type { X402ErrorCode } from "../api/middleware/x402.js";
 
 /**
  * Real cryptographic verification for the x402/Base rail — the piece
@@ -44,12 +45,16 @@ export function buildPaymentAuthorizationMessage(params: {
 export function recoverPayerAddress(
   message: string,
   signature: string,
-): { valid: true; address: string } | { valid: false; reason: string } {
+): { valid: true; address: string } | { valid: false; reason: string; code: X402ErrorCode } {
   try {
     const address = ethers.verifyMessage(message, signature);
     return { valid: true, address };
   } catch (err) {
-    return { valid: false, reason: `signature recovery failed: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      valid: false,
+      reason: `signature recovery failed: ${err instanceof Error ? err.message : String(err)}`,
+      code: "invalid_exact_evm_payload_signature",
+    };
   }
 }
 
@@ -69,17 +74,24 @@ export async function verifyOnChainUsdcTransfer(
   expectedFromAddress: string,
   expectedToAddress: string,
   minAmountUsd: number,
-): Promise<{ valid: true } | { valid: false; reason: string }> {
+): Promise<{ valid: true } | { valid: false; reason: string; code: X402ErrorCode }> {
   let receipt;
   try {
     receipt = await provider.getTransactionReceipt(txHash);
   } catch (err) {
     // Fail closed on RPC errors — a network blip or bad hash must
-    // never be treated as "verification passed."
-    return { valid: false, reason: `RPC error fetching transaction receipt: ${err instanceof Error ? err.message : String(err)}` };
+    // never be treated as "verification passed." unexpected_verify_error,
+    // not invalid_transaction_state — this is OUR infra failing to
+    // check, not proof the client's tx is actually bad; a retry might
+    // succeed once the RPC is healthy again.
+    return {
+      valid: false,
+      reason: `RPC error fetching transaction receipt: ${err instanceof Error ? err.message : String(err)}`,
+      code: "unexpected_verify_error",
+    };
   }
-  if (!receipt) return { valid: false, reason: "transaction not found — not yet mined, or an invalid hash" };
-  if (receipt.status !== 1) return { valid: false, reason: "transaction failed/reverted on-chain" };
+  if (!receipt) return { valid: false, reason: "transaction not found — not yet mined, or an invalid hash", code: "invalid_transaction_state" };
+  if (receipt.status !== 1) return { valid: false, reason: "transaction failed/reverted on-chain", code: "invalid_transaction_state" };
 
   let expectedFrom: string;
   let expectedTo: string;
@@ -87,7 +99,10 @@ export async function verifyOnChainUsdcTransfer(
     expectedFrom = ethers.getAddress(expectedFromAddress);
     expectedTo = ethers.getAddress(expectedToAddress);
   } catch {
-    return { valid: false, reason: "malformed expected address" };
+    // Our own config would have to be broken for this branch to fire
+    // (expectedToAddress is our own treasury address) — an internal
+    // fault, not a claim about the client's payload.
+    return { valid: false, reason: "malformed expected address", code: "unexpected_verify_error" };
   }
 
   const minAmountRaw = ethers.parseUnits(minAmountUsd.toFixed(USDC_DECIMALS), USDC_DECIMALS);
@@ -112,5 +127,9 @@ export async function verifyOnChainUsdcTransfer(
     }
   }
 
-  return { valid: false, reason: "no matching USDC Transfer found in this transaction (wrong token, wrong from/to address, or amount below required)" };
+  return {
+    valid: false,
+    reason: "no matching USDC Transfer found in this transaction (wrong token, wrong from/to address, or amount below required)",
+    code: "invalid_payload",
+  };
 }

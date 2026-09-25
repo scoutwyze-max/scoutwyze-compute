@@ -16,6 +16,7 @@ import {
   RECEIPT_TTL_SECONDS,
   signReceipt,
   verifyReceiptToken,
+  type X402ErrorCode,
 } from "./x402.js";
 
 export type AuthRail = "bearer" | "x402";
@@ -110,13 +111,13 @@ export async function verifyX402Payment(
   const submission = decodePaymentHeader(typeof paymentHeader === "string" ? paymentHeader : undefined);
 
   if ("error" in submission) {
-    sendPaymentRequired(reply, deps, now);
+    sendPaymentRequired(reply, deps, now, submission.error, submission.code);
     return { ok: false };
   }
 
   const consumed = deps.challengeStore.consume(submission.nonce, submission.amountUsdc, now);
   if (!consumed.ok) {
-    sendPaymentRequired(reply, deps, now, consumed.reason);
+    sendPaymentRequired(reply, deps, now, consumed.reason, consumed.code);
     return { ok: false };
   }
 
@@ -135,6 +136,7 @@ export async function verifyX402Payment(
       deps,
       now,
       !recovered.valid ? recovered.reason : "signature does not match claimed payerAddress",
+      "invalid_exact_evm_payload_signature",
     );
     return { ok: false };
   }
@@ -144,7 +146,13 @@ export async function verifyX402Payment(
   // reusing one real transfer against many nonces.
   const txAlreadyUsed = deps.processedEvents.isProcessed(submission.txHash);
   if (txAlreadyUsed) {
-    sendPaymentRequired(reply, deps, now, "this transaction has already been used to authorize a different payment");
+    sendPaymentRequired(
+      reply,
+      deps,
+      now,
+      "this transaction has already been used to authorize a different payment",
+      "invalid_transaction_state",
+    );
     return { ok: false };
   }
 
@@ -158,7 +166,7 @@ export async function verifyX402Payment(
     submission.amountUsdc,
   );
   if (!onChain.valid) {
-    sendPaymentRequired(reply, deps, now, onChain.reason);
+    sendPaymentRequired(reply, deps, now, onChain.reason, onChain.code);
     return { ok: false };
   }
 
@@ -252,12 +260,20 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
   };
 }
 
-function sendPaymentRequired(reply: FastifyReply, deps: X402VerifyDeps, now: number, reason?: string): void {
+function sendPaymentRequired(reply: FastifyReply, deps: X402VerifyDeps, now: number, reason?: string, code?: X402ErrorCode): void {
   const challenge = deps.challengeStore.issue(deps.routePriceUsdc, now, deps.resource);
   reply.code(402).send({
     x402Version: 1,
     error: "payment_required",
     reason: reason ?? "no valid Authorization: Bearer <api_key> or X-PAYMENT header provided",
+    // Machine-parseable companion to `reason` (2026-09-25) — real x402
+    // spec v2 §9 vocabulary where this failure maps onto it, a clearly
+    // non-spec ScoutWyze-specific code where it's our own added
+    // challenge/nonce layer (see X402ErrorCode's own doc comment).
+    // Omitted (not null) on the very first, no-header-at-all challenge
+    // — that's an initial offer, not a rejected attempt, so there's no
+    // failure to code.
+    ...(code ? { code } : {}),
     accepts: [challenge],
     // Sibling of accepts, not nested inside it - verified against the
     // real x402-foundation PaymentRequired type (x402.ts's

@@ -151,6 +151,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/unknown or already-expired/);
+    expect(res.json().code).toBe("unknown_challenge");
   });
 
   it("REPLAY PROTECTION — reusing the same nonce for a second payment is rejected", async () => {
@@ -180,6 +181,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     });
     expect(replay.statusCode).toBe(402);
     expect(replay.json().reason).toMatch(/already used.*replay/i);
+    expect(replay.json().code).toBe("challenge_already_used");
   });
 
   it("TX REUSE — a real transfer already used to authorize one nonce cannot authorize a different nonce", async () => {
@@ -219,6 +221,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/already been used to authorize a different payment/);
+    expect(res.json().code).toBe("invalid_transaction_state");
   });
 
   it("rejects a payment whose signature does not recover to the claimed payerAddress", async () => {
@@ -245,6 +248,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/signature does not match claimed payerAddress/);
+    expect(res.json().code).toBe("invalid_exact_evm_payload_signature");
   });
 
   it("rejects a payment whose on-chain transaction failed/reverted", async () => {
@@ -270,6 +274,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/failed\/reverted/);
+    expect(res.json().code).toBe("invalid_transaction_state");
   });
 
   it("rejects a payment whose real transfer sent USDC to the wrong address (not our treasury)", async () => {
@@ -290,6 +295,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/no matching USDC Transfer found/);
+    expect(res.json().code).toBe("invalid_payload");
   });
 
   it("rejects a payment amount below the challenge's required minimum", async () => {
@@ -306,6 +312,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().reason).toMatch(/below the required/);
+    expect(res.json().code).toBe("invalid_exact_evm_payload_authorization_value_mismatch");
   });
 
   it("rejects a payment on the wrong network", async () => {
@@ -326,6 +333,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("invalid_payload");
   });
 
   it("rejects a garbled (non-base64/non-JSON) X-PAYMENT header", async () => {
@@ -337,6 +345,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("invalid_payload");
   });
 
   it("RECEIPT REUSE — the same receipt authorizes a second identical request within its TTL, no new payment required", async () => {

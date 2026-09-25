@@ -27,6 +27,36 @@ export const RECEIPT_TTL_SECONDS = 60;
 
 const RECEIPT_SIGNING_SECRET = process.env.X402_RECEIPT_SIGNING_SECRET || "dev-only-insecure-default-secret";
 
+/**
+ * Machine-parseable failure codes for a rejected payment attempt
+ * (2026-09-25) — real x402 spec vocabulary, not invented: verified
+ * directly against coinbase/x402/specs/x402-specification-v2.md §9
+ * ("Error Handling"), the same literal strings VerifyResponse's
+ * invalidReason / SettleResponse's errorReason use. Previously every
+ * failure only carried a free-text `reason` sentence — fine for a
+ * human reading logs, useless for an agent runtime trying to decide
+ * "should I retry with a fresh signature, a fresh nonce, or give up."
+ *
+ * The last three are NOT from the spec: ScoutWyze's own pre-issued
+ * challenge/nonce layer (ChallengeStore — a server-side anti-replay
+ * token issued in the 402 challenge, which the client must echo back
+ * signed) is an addition on top of base x402, not something the spec
+ * itself defines a vocabulary for. Kept clearly, deliberately distinct
+ * from the spec codes rather than force-mapped onto one — e.g. a
+ * timed-out ScoutWyze challenge is NOT the same failure as an expired
+ * EIP-3009 authorization.valid_before, and claiming otherwise would
+ * mislead a parser that already knows the real spec codes.
+ */
+export type X402ErrorCode =
+  | "invalid_payload"
+  | "invalid_exact_evm_payload_signature"
+  | "invalid_exact_evm_payload_authorization_value_mismatch"
+  | "invalid_transaction_state"
+  | "unexpected_verify_error"
+  | "unknown_challenge"
+  | "challenge_already_used"
+  | "challenge_expired";
+
 export interface X402Challenge {
   scheme: "exact";
   network: "base";
@@ -116,7 +146,10 @@ interface ChallengeRow {
 // Thrown inside consume()'s transaction to force a rollback on any
 // rejection path — never escapes consume() itself.
 class ChallengeRejected extends Error {
-  constructor(public readonly reason: string) {
+  constructor(
+    public readonly reason: string,
+    public readonly code: X402ErrorCode,
+  ) {
     super(reason);
   }
 }
@@ -166,14 +199,19 @@ export class ChallengeStore {
     };
   }
 
-  consume(nonce: string, submittedAmountUsdc: number, now: number): { ok: true } | { ok: false; reason: string } {
+  consume(nonce: string, submittedAmountUsdc: number, now: number): { ok: true } | { ok: false; reason: string; code: X402ErrorCode } {
     const run = this.db.transaction(() => {
       const row = this.db.prepare<[string], ChallengeRow>(`SELECT * FROM x402_challenges WHERE nonce = ?`).get(nonce);
-      if (!row) throw new ChallengeRejected("unknown or already-expired challenge nonce");
-      if (row.used === 1) throw new ChallengeRejected("nonce already used — replay attempt rejected");
-      if (now > row.expires_at_ms) throw new ChallengeRejected(`challenge timed out — submit payment within ${CHALLENGE_TTL_SECONDS}s of receiving it`);
+      if (!row) throw new ChallengeRejected("unknown or already-expired challenge nonce", "unknown_challenge");
+      if (row.used === 1) throw new ChallengeRejected("nonce already used — replay attempt rejected", "challenge_already_used");
+      if (now > row.expires_at_ms) {
+        throw new ChallengeRejected(`challenge timed out — submit payment within ${CHALLENGE_TTL_SECONDS}s of receiving it`, "challenge_expired");
+      }
       if (Math.round(submittedAmountUsdc * 100) < row.amount_usdc_cents) {
-        throw new ChallengeRejected(`amount $${submittedAmountUsdc} below the required $${(row.amount_usdc_cents / 100).toFixed(2)}`);
+        throw new ChallengeRejected(
+          `amount $${submittedAmountUsdc} below the required $${(row.amount_usdc_cents / 100).toFixed(2)}`,
+          "invalid_exact_evm_payload_authorization_value_mismatch",
+        );
       }
       this.db.prepare(`UPDATE x402_challenges SET used = 1 WHERE nonce = ?`).run(nonce);
     });
@@ -182,7 +220,7 @@ export class ChallengeStore {
       run();
       return { ok: true };
     } catch (err) {
-      if (err instanceof ChallengeRejected) return { ok: false, reason: err.reason };
+      if (err instanceof ChallengeRejected) return { ok: false, reason: err.reason, code: err.code };
       throw err;
     }
   }
@@ -265,21 +303,29 @@ export interface X402PaymentSubmission {
   signature: string;
 }
 
-export function decodePaymentHeader(headerValue: string | undefined): X402PaymentSubmission | { error: string } {
+export function decodePaymentHeader(
+  headerValue: string | undefined,
+): X402PaymentSubmission | { error: string; code?: X402ErrorCode } {
+  // No code here, deliberately (2026-09-25): an absent header is the
+  // normal first-contact case — an agent's opening request, before it
+  // has anything to submit — not a rejected payload. Every other
+  // branch below DID receive something and found it broken, so those
+  // get a real code; this one doesn't, or a parser would be told
+  // "your payload is invalid" about a payload that was never sent.
   if (!headerValue) return { error: "missing X-PAYMENT header" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(Buffer.from(headerValue, "base64").toString("utf-8"));
   } catch {
-    return { error: "X-PAYMENT header is not valid base64-encoded JSON" };
+    return { error: "X-PAYMENT header is not valid base64-encoded JSON", code: "invalid_payload" };
   }
   const p = parsed as Partial<X402PaymentSubmission>;
-  if (p.scheme !== "exact" || p.network !== "base") return { error: "unsupported payment scheme/network" };
-  if (typeof p.nonce !== "string" || !p.nonce) return { error: "missing nonce — payment must reference a real issued challenge" };
-  if (typeof p.amountUsdc !== "number") return { error: "missing or invalid amountUsdc" };
-  if (typeof p.payerAddress !== "string" || !p.payerAddress) return { error: "missing payerAddress" };
-  if (typeof p.txHash !== "string" || !p.txHash) return { error: "missing txHash" };
-  if (typeof p.signature !== "string" || !p.signature) return { error: "missing signature" };
+  if (p.scheme !== "exact" || p.network !== "base") return { error: "unsupported payment scheme/network", code: "invalid_payload" };
+  if (typeof p.nonce !== "string" || !p.nonce) return { error: "missing nonce — payment must reference a real issued challenge", code: "invalid_payload" };
+  if (typeof p.amountUsdc !== "number") return { error: "missing or invalid amountUsdc", code: "invalid_payload" };
+  if (typeof p.payerAddress !== "string" || !p.payerAddress) return { error: "missing payerAddress", code: "invalid_payload" };
+  if (typeof p.txHash !== "string" || !p.txHash) return { error: "missing txHash", code: "invalid_payload" };
+  if (typeof p.signature !== "string" || !p.signature) return { error: "missing signature", code: "invalid_payload" };
   return {
     scheme: "exact",
     network: "base",

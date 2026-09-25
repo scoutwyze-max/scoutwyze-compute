@@ -47,7 +47,10 @@ describe("recoverPayerAddress — real EIP-191 signature recovery", () => {
   it("rejects a malformed signature rather than throwing", () => {
     const result = recoverPayerAddress("some message", "not-a-real-signature");
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.reason).toMatch(/signature recovery failed/);
+    if (!result.valid) {
+      expect(result.reason).toMatch(/signature recovery failed/);
+      expect(result.code).toBe("invalid_exact_evm_payload_signature");
+    }
   });
 });
 
@@ -77,14 +80,20 @@ describe("verifyOnChainUsdcTransfer — real RPC-shaped receipt verification", (
 
     const result = await verifyOnChainUsdcTransfer(reader, "0xtx1", from, TREASURY, 0.15);
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.reason).toMatch(/no matching USDC Transfer/);
+    if (!result.valid) {
+      expect(result.reason).toMatch(/no matching USDC Transfer/);
+      expect(result.code).toBe("invalid_payload");
+    }
   });
 
   it("rejects a transaction that was never mined / unknown hash", async () => {
     const reader = new FakeChainReader(); // no receipt configured
     const result = await verifyOnChainUsdcTransfer(reader, "0xneverexisted", "0x0000000000000000000000000000000000dEaD", TREASURY, 0.15);
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.reason).toMatch(/not found/);
+    if (!result.valid) {
+      expect(result.reason).toMatch(/not found/);
+      expect(result.code).toBe("invalid_transaction_state");
+    }
   });
 
   it("rejects a failed/reverted transaction even if it contains a matching-looking log", async () => {
@@ -94,7 +103,10 @@ describe("verifyOnChainUsdcTransfer — real RPC-shaped receipt verification", (
 
     const result = await verifyOnChainUsdcTransfer(reader, "0xtx1", from, TREASURY, 0.15);
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.reason).toMatch(/failed\/reverted/);
+    if (!result.valid) {
+      expect(result.reason).toMatch(/failed\/reverted/);
+      expect(result.code).toBe("invalid_transaction_state");
+    }
   });
 
   it("rejects a transfer sent to the WRONG recipient (not our treasury)", async () => {
@@ -133,7 +145,10 @@ describe("verifyOnChainUsdcTransfer — real RPC-shaped receipt verification", (
 
     const result = await verifyOnChainUsdcTransfer(reader, "0xtx1", "0x0000000000000000000000000000000000dEaD", TREASURY, 0.15);
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.reason).toMatch(/RPC error/);
+    if (!result.valid) {
+      expect(result.reason).toMatch(/RPC error/);
+      expect(result.code).toBe("unexpected_verify_error");
+    }
   });
 
   it("real Base USDC contract address is checksummed and matches Circle's published address, not the bridged USDbC token", () => {

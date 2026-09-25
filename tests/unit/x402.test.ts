@@ -50,13 +50,14 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
     expect(store.consume(nonce, 0.15, now)).toEqual({
       ok: false,
       reason: "nonce already used — replay attempt rejected",
+      code: "challenge_already_used",
     });
   });
 
   it("rejects a nonce that was never issued", () => {
     const store = new ChallengeStore(db, TEST_TREASURY_ADDRESS);
     const result = store.consume("never-issued", 0.15, Date.now());
-    expect(result).toEqual({ ok: false, reason: "unknown or already-expired challenge nonce" });
+    expect(result).toEqual({ ok: false, reason: "unknown or already-expired challenge nonce", code: "unknown_challenge" });
   });
 
   it("rejects an amount below what the challenge required", () => {
@@ -65,7 +66,10 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
     const { nonce } = store.issue(0.2, now, "/v1/route/quote");
     const result = store.consume(nonce, 0.1, now);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/below the required \$0\.2/);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/below the required \$0\.2/);
+      expect(result.code).toBe("invalid_exact_evm_payload_authorization_value_mismatch");
+    }
   });
 
   it("CLAUDE.md §3 'times out' — a nonce submitted after CHALLENGE_TTL_SECONDS is rejected, not silently honored", () => {
@@ -85,7 +89,10 @@ describe("ChallengeStore — single-use nonce enforcement", () => {
 
     const result = store.consume(nonce, 0.15, justAfterTimeout);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/timed out/);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/timed out/);
+      expect(result.code).toBe("challenge_expired");
+    }
   });
 });
 
