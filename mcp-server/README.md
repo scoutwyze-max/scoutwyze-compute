@@ -150,6 +150,25 @@ scriptable end-to-end without that. The same `.mcpb` file also works
 for Claude Desktop's single-click local install (drag the file onto
 the app).
 
+**Published live 2026-09-25 as `scoutwyze/compute-mcp`**
+(`https://smithery.ai/servers/scoutwyze/compute-mcp`). Real, hard-won
+finding while getting there: **`manifest.json` deliberately has no
+top-level `tools` array**, even though MCPB's own spec allows one and
+`mcpb validate` accepts it fine. Smithery's stdio-bundle ingestion
+throws a 400 (`"Invalid input: expected object, received undefined"`,
+once per declared tool) on any bundle that includes one — confirmed by
+bisection: a manifest with `tools` fails every time, the identical
+manifest without it publishes clean, `user_config`/`env`/every other
+optional field included. Looks like a real gap in their ingestion
+(their own docs describe a *different*, richer tool-schema format —
+`@modelcontextprotocol/sdk/types.js`-shaped, with a required
+`inputSchema` — used for hosted URL servers' static server cards, not
+MCPB's plainer `tools[]`), not something on our end to fix. If you're
+re-publishing and add `tools` back because it seems like the more
+complete manifest, you will hit this again — check whether Smithery's
+ingestion has been fixed before doing so, don't assume it's safe now
+just because MCPB's own validator accepts it.
+
 ## Other rules this server follows, not just documents
 
 - **Fails closed.** A network failure to the real API returns a fixed,

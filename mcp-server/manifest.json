@@ -28,17 +28,6 @@
       }
     }
   },
-  "tools": [
-    {
-      "name": "scoutwyze_sample",
-      "description": "Free, anonymous, rate-limited preview of a real ranked GPU offer. No arguments, never billed."
-    },
-    {
-      "name": "scoutwyze_rank",
-      "description": "Ranks current RunPod GPU offers by price and freshness for a given workload. Billed per successful match."
-    }
-  ],
-  "tools_generated": false,
   "keywords": [
     "mcp",
     "model-context-protocol",
