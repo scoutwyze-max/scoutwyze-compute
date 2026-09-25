@@ -6,6 +6,37 @@ decision engine for AI infrastructure agents and MLOps pipelines. See
 boundaries, and the data-provenance model this whole engine is built
 around.
 
+**What this is not:** an execution platform. Every `compute/rank`
+response carries `limits: {not_reserved: true, not_provisioned: true,
+can_provision: false}` — this ranks and recommends where to rent GPU
+compute, it never reserves, provisions, or runs anything itself. See
+`SOT.md` for the rigorously-verified current state of every claim in
+this document.
+
+## For AI agents & autonomous integration
+
+Live: **https://scoutwyze-compute.fly.dev** — dual-rail, pay per
+successful ranked match, no subscription.
+
+```bash
+# Free, anonymous, rate-limited — see the real response shape before paying
+curl https://scoutwyze-compute.fly.dev/v1/compute/sample
+
+# Rail 1 — prepaid Bearer key (one-time human funding, then headless)
+curl -X POST https://scoutwyze-compute.fly.dev/v1/compute/rank \
+  -H "Authorization: Bearer sw_live_..." -H "Content-Type: application/json" \
+  -d '{"gpuClass":"H100","preference":"cheapest"}'
+
+# Rail 2 — x402/USDC on Base, zero signup, zero API key, ever
+curl -X POST https://scoutwyze-compute.fly.dev/v1/compute/rank \
+  -d '{"gpuClass":"H100"}'
+# -> HTTP 402 with a real payment challenge; pay it, resubmit with X-PAYMENT, get a 200
+```
+
+- **`GET /llms.txt`** and **`GET /openapi.json`** — full machine-readable API description, both rails, the x402 error-code vocabulary, everything below.
+- **`examples/`** — copy-pasteable Node.js and Python clients (both rails, including a real x402 sign-and-pay flow), plus a LangChain `Tool` wrapper.
+- **`@scoutwyze/compute-mcp`** on [npm](https://www.npmjs.com/package/@scoutwyze/compute-mcp) — MCP server for Claude Desktop/Cursor: `npx -y @scoutwyze/compute-mcp`. Also listed in the [official MCP Registry](https://registry.modelcontextprotocol.io) (`io.github.scoutwyze-max/compute-mcp`) and [Smithery](https://smithery.ai/servers/scoutwyze/compute-mcp) (`scoutwyze/compute-mcp`).
+
 ## V1 scope
 
 - One SKU: 8× H100 80GB, InfiniBand/RDMA, US regions only.
@@ -41,22 +72,26 @@ npm test                   # full unit + integration suite
 npm run typecheck
 ```
 
-## Try it
+## Try it (local)
 
 ```bash
 # 1. Get a real API key (free — funding it is a separate step)
 curl -X POST http://localhost:8787/v1/signup
 
 # 2. Use it — a brand-new key has a $0 balance, so this correctly
-#    returns 402 insufficient_credits rather than a quote. Fund the
-#    account (via /v1/checkout-sessions + a real Stripe payment, or
+#    returns 402 insufficient_credits rather than a ranked result. Fund
+#    the account (via /v1/checkout-sessions + a real Stripe payment, or
 #    POST /v1/admin/accounts/:accountId/credits with X-Admin-Secret for
 #    local testing) to see a real 200.
-curl -X POST http://localhost:8787/v1/route/quote \
+curl -X POST http://localhost:8787/v1/compute/rank \
   -H "Authorization: Bearer <apiKey from step 1>" \
   -H "Content-Type: application/json" \
-  -d '{"workload_type": "inference"}'
+  -d '{"gpuClass": "H100", "preference": "cheapest"}'
 ```
+
+Against the live production deployment instead, see "For AI agents &
+autonomous integration" above, or `examples/` for full client code in
+Node.js and Python (both rails).
 
 ## Project layout
 
@@ -75,9 +110,12 @@ src/
   db/                        SQLite connection + schema (durable: keys, ledger, x402 nonces, processed payment events)
 scripts/
   smoke-test.mjs             Post-deployment smoke test — hits a real running instance over HTTP
+  pay-x402-quote.mjs         Manual two-step x402 payment helper (get challenge, submit signed payment)
 tests/
   unit/                      Pure-function coverage: cost math, risk scoring, filtering, provenance separation, payments
   integration/                Full HTTP flow via Fastify inject(): auth, fail-closed behavior, signup/checkout, webhooks
+examples/                    Copy-pasteable Node.js/Python clients (dual-rail) + a LangChain Tool wrapper — see examples/README.md
+mcp-server/                  Separate, independently-published MCP server package (@scoutwyze/compute-mcp) wrapping this API for MCP-native hosts — see mcp-server/README.md
 ```
 
 ## Deployment
@@ -99,10 +137,11 @@ npm run smoke -- https://scoutwyze-compute.fly.dev   # post-deploy verification
 
 ## What's deliberately not built yet
 
-- Real HTTP-backed provider adapters are wired but not turned on — V1
-  still defaults every provider to its local fixture (`rawSource.ts`'s
-  `FixtureRawEntrySource`); flipping a provider to `HttpRawEntrySource`
-  needs that provider's real API key.
+- RunPod is live in production (`RunpodLiveCatalogSource`,
+  `RUNPOD_API_KEY` configured) — Lambda Labs and CoreWeave remain
+  fixture-only, comparison data, never bookable, never live. Flipping
+  either to live needs that provider's real API key wired the same way
+  RunPod's already is.
 - Horizontal scaling / multi-instance deployment (see the single-writer
   SQLite constraint above) — would need a real shared database or
   something like LiteFS first.
