@@ -45,6 +45,9 @@ export function registerDiscoveryRoutes(app: FastifyInstance, deps: DiscoveryRou
         ? "- POST /v1/route/book — Bearer-only. Re-runs rank server-side, dispatches only to RunPod, debits only after RunPod accepts the job. Body: same as rank plus {hours}."
         : "- POST /v1/route/book exists but is not yet documented here — it hasn't had a successful end-to-end live test yet. Don't build against it until this line changes.",
       "",
+      "## MCP (Model Context Protocol)",
+      "`@scoutwyze/compute-mcp` on npm wraps compute/sample and compute/rank as MCP tools (scoutwyze_sample, scoutwyze_rank) for Claude Desktop, Cursor, and other MCP-native hosts — `npx -y @scoutwyze/compute-mcp`, optional SCOUTWYZE_API_KEY env var. Stateless pass-through: holds no private key, never signs or settles x402 itself — an unauthenticated call surfaces the real 402 challenge as tool content for a wallet-capable calling agent to settle. Also listed in the official MCP Registry as io.github.scoutwyze-max/compute-mcp.",
+      "",
       "## What this is not",
       "Not a multi-cloud aggregator. Not autonomous routing. Lambda Labs and CoreWeave data is comparison-only fixture data, never bookable, never live.",
       "",

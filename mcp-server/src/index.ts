@@ -16,14 +16,25 @@
 // the schema lean") — only sample/rank, which share the one frozen
 // envelope (see SOT.md §3).
 
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { callCompute } from "./client.js";
 
+// Real bug caught in a doc-audit pass, 2026-09-24: this was hardcoded
+// to "0.1.0" and never bumped when the package moved to 0.1.1 for the
+// MCP Registry submission — the server's own protocol handshake was
+// already lying about its version. Read from package.json instead of
+// a literal so it can't drift again; createRequire (not a JSON import
+// attribute) specifically for compatibility across the full engines
+// range this package declares (>=18), where import-attribute syntax
+// for JSON isn't uniformly stable.
+const pkg = createRequire(import.meta.url)("../package.json");
+
 const server = new McpServer({
   name: "scoutwyze-compute",
-  version: "0.1.0",
+  version: pkg.version,
   title: "ScoutWyze Compute",
 });
 

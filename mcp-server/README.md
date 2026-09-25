@@ -12,11 +12,27 @@ installable package, kept out of `src/` on purpose.
 **This server never holds a private key and never signs or settles an
 x402 payment itself.** If a call to `scoutwyze_rank` is unauthenticated
 (no `SCOUTWYZE_API_KEY` configured, or the key is invalid), the real
-x402 payment challenge from the API (nonce, `payTo`, `maxAmountRequired`,
-`expiresAt`) is returned as the tool's result content, not swallowed
-or auto-paid. A wallet-capable **calling agent** — not this server —
-is responsible for signing and submitting the on-chain payment and
-retrying with the resulting `X-PAYMENT` proof. This server's only
+x402 payment challenge from the API is returned as the tool's result
+content, not swallowed or auto-paid — for example:
+
+```json
+{
+  "x402Version": 1,
+  "error": "payment_required",
+  "accepts": [{
+    "scheme": "exact", "network": "base", "maxAmountRequired": "0.15",
+    "resource": "/v1/compute/rank",
+    "payTo": "0xc132a315a05541a4b72c272de539eb86de977fb9",
+    "asset": "USDC", "nonce": "...", "expiresAt": "..."
+  }]
+}
+```
+
+A wallet-capable **calling agent** — not this server — is responsible
+for signing and submitting the on-chain payment and retrying the same
+tool call with the resulting `X-PAYMENT` proof (see
+`scripts/pay-x402-quote.mjs` in the main repo for a full reference
+implementation of that signing/retry flow). This server's only
 credential is an optional prepaid Bearer key.
 
 This isn't a style choice. A "lightweight package anyone can spin up
@@ -44,8 +60,9 @@ actively-documented path (see `SOT.md`).
 
 ## Configuration
 
-Once published (see "Publishing" below), add to your MCP host's config
-(e.g. Claude Desktop's `mcp.json`):
+Published on npm as `@scoutwyze/compute-mcp` and listed in the official
+MCP Registry as `io.github.scoutwyze-max/compute-mcp`. Add to your MCP
+host's config (e.g. Claude Desktop's `mcp.json`):
 
 ```json
 {
@@ -61,8 +78,7 @@ Once published (see "Publishing" below), add to your MCP host's config
 }
 ```
 
-Before it's published, or for local development, point at the built
-file directly instead:
+For local development, point at the built file directly instead:
 
 ```json
 {
@@ -94,35 +110,20 @@ npm run build   # -> dist/index.js
 npm run dev     # runs directly from src/ via tsx, no build step
 ```
 
-## Publishing
+## Publishing a new version
 
-`npm publish` from inside this directory (`prepublishOnly` runs the
-build automatically, so `dist/` is always fresh — never publish a
-stale build by hand-running `npm run build` first and trusting it's
-still current). Two things to confirm before running it for real,
-neither of which could be verified from here:
+`npm version <patch|minor|major>` then `npm publish` from inside this
+directory (`prepublishOnly` runs the build automatically, so `dist/`
+is always fresh — never publish a stale build by hand-running
+`npm run build` first and trusting it's still current). After
+publishing to npm, also bump `version` in `server.json` to match and
+re-run `mcp-publisher publish server.json`, or the two registries will
+disagree about the current version.
 
-- **The `@scoutwyze` npm org must exist and you must be a member of
-  it**, or the scoped name `@scoutwyze/compute-mcp` will fail to
-  publish. Neither the package name nor the org's existence could be
-  confirmed automatically — `npm view @scoutwyze/compute-mcp` and
-  `npm view scoutwyze-compute-mcp` both 404 (unclaimed), but that
-  doesn't distinguish "org exists, package doesn't" from "org doesn't
-  exist yet." Check/create it at npmjs.com first.
-- **License** — set to MIT in `package.json`/`LICENSE` as the default
-  for this kind of thin client wrapper (extremely common for MCP
-  servers, and this package contains no proprietary logic — it's just
-  an HTTP client). Change it if you want something else.
-
-`publishConfig.access: "public"` is already set, since a scoped
-package defaults to requiring a paid private-package plan otherwise.
-
-One more thing worth knowing if you touch the build: `tsc` does not
-preserve or set the executable bit on its output, so `dist/index.js`
-came out of a plain `npm run build` as `644` — not runnable via `bin`.
-Verified directly against a real `npm pack` tarball, not assumed. The
-`postbuild` script (`chmod +x dist/index.js`) fixes this on every
-build; don't remove it.
+`tsc` does not preserve or set the executable bit on its output, so
+`dist/index.js` comes out of a plain `npm run build` as `644` — not
+runnable via `bin`. The `postbuild` script (`chmod +x dist/index.js`)
+fixes this on every build; don't remove it.
 
 ## Other rules this server follows, not just documents
 
