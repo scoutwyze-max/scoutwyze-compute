@@ -230,6 +230,20 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4 — real EIP-3
     expect(res.json().code).toBe("insufficient_funds");
   });
 
+  it("rejects a payment PayAI's /verify flags invalid, without ever calling /settle", async () => {
+    built = await buildTestApp();
+    built.facilitator.setNextVerifyResult({ isValid: false, invalidReason: "invalid_exact_evm_insufficient_balance", payer: "0xdead" });
+    built.facilitator.setNextResult({ success: false, transaction: "", network: "base", errorReason: "some_future_code_this_server_has_never_seen" });
+    // ^ if settle() were reached despite the verify rejection, this
+    // unrelated failure result would leak through and the assertion
+    // below would fail — proving verify() short-circuits before settle().
+
+    const payment = await buildPayment(built, { amountUsdc: 0.15 });
+    const res = await built.app.inject({ method: "POST", url: "/v1/route/quote", headers: { "x-payment": payment }, payload: {} });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("invalid_exact_evm_insufficient_balance");
+  });
+
   it("an unrecognized/malformed facilitator error code doesn't leak through as if it were a known one", async () => {
     built = await buildTestApp();
     built.facilitator.setNextResult({ success: false, transaction: "", network: "base", errorReason: "some_future_code_this_server_has_never_seen" });

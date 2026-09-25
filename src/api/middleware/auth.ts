@@ -68,7 +68,7 @@ export interface X402VerifyDeps {
  * top-of-file comment for the full story on why that was a real,
  * live spec-compliance bug, not a style choice).
  *
- * Five checks, in order, cheapest/most-locally-verifiable first:
+ * Six checks, in order, cheapest/most-locally-verifiable first:
  *   1. Decode the payload — real x402 v1 PaymentPayload shape
  *      (signature + authorization: from/to/value/validAfter/
  *      validBefore/nonce).
@@ -78,15 +78,17 @@ export interface X402VerifyDeps {
  *   3. Bounds check (no network) — `to` matches our treasury, `value`
  *      meets the required amount, current time is within
  *      [validAfter, validBefore).
- *   4. Settle via PayAI's facilitator (payments/payAiFacilitator.ts)
+ *   4. Verify via PayAI's facilitator's /verify, carrying
+ *      serverExtensions.bazaar when present — fails fast on a bad
+ *      payload before attempting settlement, and is the remaining
+ *      untested candidate mechanism for real Bazaar discovery listing
+ *      (SOT.md §6 — neither a bare successful /settle nor a bare
+ *      /verify-with-extensions alone was found to trigger listing).
+ *   5. Settle via PayAI's facilitator (payments/payAiFacilitator.ts)
  *      — this is the one step requiring a funded relayer wallet,
  *      which this server deliberately doesn't run itself; PayAI
  *      broadcasts transferWithAuthorization and reports the result.
- *      Real settlements flowing through a Bazaar-participating
- *      facilitator is also what makes this endpoint Bazaar-listed
- *      (SOT.md §6) — a side effect of this same call, not separate
- *      work.
- *   5. Independently re-verify the settled transaction on-chain
+ *   6. Independently re-verify the settled transaction on-chain
  *      ourselves (verifyOnChainUsdcTransfer, unchanged from before) —
  *      this server doesn't just trust PayAI's success claim, matching
  *      the trust-minimized posture everywhere else in this codebase.
@@ -145,12 +147,31 @@ export async function verifyX402Payment(
     return { ok: false };
   }
 
-  // Check 3: settle via PayAI — broadcasts transferWithAuthorization.
+  // Check 3: verify via PayAI before ever attempting settlement — cheap
+  // fail-fast (avoids a wasted settlement attempt on an obviously bad
+  // payload) and, per serverExtensions.bazaar, this is also PayAI's
+  // real hook for Bazaar discovery listing (see payAiFacilitator.ts's
+  // top-of-file comment; confirmed live 2026-09-26 that neither a bare
+  // successful /settle nor a bare /verify with serverExtensions alone
+  // triggers listing — this full verify-then-settle sequence is the
+  // remaining untested combination).
+  const paymentRequirements = deps.challengeStore.issue(deps.routePriceUsdc, deps.resource);
+  const verifyResult = await deps.facilitator.verify(
+    submission,
+    paymentRequirements,
+    deps.bazaarExtension ? { bazaar: deps.bazaarExtension } : undefined,
+  );
+  if (!verifyResult.isValid) {
+    const code: X402ErrorCode = isKnownX402ErrorCode(verifyResult.invalidReason) ? verifyResult.invalidReason : "unexpected_verify_error";
+    sendPaymentRequired(reply, deps, verifyResult.invalidMessage ?? verifyResult.invalidReason ?? "payment verification failed", code);
+    return { ok: false };
+  }
+
+  // Check 4: settle via PayAI — broadcasts transferWithAuthorization.
   // Their own duplicate_settlement detection (backed by the USDC
   // contract's on-chain authorizationState mapping) is what actually
   // prevents this exact authorization being spent twice; we don't
   // duplicate that check ourselves.
-  const paymentRequirements = deps.challengeStore.issue(deps.routePriceUsdc, deps.resource);
   const settleResult = await deps.facilitator.settle(submission, paymentRequirements);
   if (!settleResult.success) {
     const code: X402ErrorCode = isKnownX402ErrorCode(settleResult.errorReason) ? settleResult.errorReason : "unexpected_verify_error";
@@ -158,7 +179,7 @@ export async function verifyX402Payment(
     return { ok: false };
   }
 
-  // Check 4: this exact settled transaction hasn't already been used
+  // Check 5: this exact settled transaction hasn't already been used
   // to grant a DIFFERENT request on our side (defense in depth beyond
   // what PayAI/the chain already guarantee).
   if (deps.processedEvents.isProcessed(settleResult.transaction)) {
@@ -166,7 +187,7 @@ export async function verifyX402Payment(
     return { ok: false };
   }
 
-  // Check 5: independently confirm the transfer on-chain ourselves —
+  // Check 6: independently confirm the transfer on-chain ourselves —
   // don't just trust PayAI's success claim.
   const onChain = await verifyOnChainUsdcTransfer(deps.chainReader, settleResult.transaction, authorization.from, deps.treasuryAddress, deps.routePriceUsdc);
   if (!onChain.valid) {

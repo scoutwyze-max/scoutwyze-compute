@@ -1,4 +1,4 @@
-import type { MinimalFacilitatorClient, FacilitatorSettleResult } from "../../src/payments/payAiFacilitator.js";
+import type { MinimalFacilitatorClient, FacilitatorSettleResult, FacilitatorVerifyResult } from "../../src/payments/payAiFacilitator.js";
 import type { X402PaymentRequirements, X402PaymentSubmission } from "../../src/api/middleware/x402.js";
 import type { FakeChainReader } from "./fakeChainReader.js";
 import { fakeSuccessfulReceipt, encodeUsdcTransferLog } from "./fakeUsdcTransfer.js";
@@ -23,6 +23,7 @@ function fakeTxHash(): string {
  * authorizationState mapping actually enforces on real mainnet. */
 export class FakeFacilitatorClient implements MinimalFacilitatorClient {
   private nextResult: FacilitatorSettleResult | null = null;
+  private nextVerifyResult: FacilitatorVerifyResult | null = null;
   private seenAuthorizations = new Set<string>();
 
   constructor(private readonly chainReader: FakeChainReader) {}
@@ -32,6 +33,24 @@ export class FakeFacilitatorClient implements MinimalFacilitatorClient {
    * outages, etc). Cleared after one use. */
   setNextResult(result: FacilitatorSettleResult): void {
     this.nextResult = result;
+  }
+
+  /** Override the next verify() call's result — for testing the
+   * fail-fast-before-settlement path. Cleared after one use. Default
+   * (no override) is always isValid:true, matching this test double's
+   * general stance of simulating a real, well-formed, fundable
+   * payment unless a test deliberately asks otherwise. */
+  setNextVerifyResult(result: FacilitatorVerifyResult): void {
+    this.nextVerifyResult = result;
+  }
+
+  async verify(): Promise<FacilitatorVerifyResult> {
+    if (this.nextVerifyResult) {
+      const result = this.nextVerifyResult;
+      this.nextVerifyResult = null;
+      return result;
+    }
+    return { isValid: true };
   }
 
   async settle(paymentPayload: X402PaymentSubmission, paymentRequirements: X402PaymentRequirements): Promise<FacilitatorSettleResult> {

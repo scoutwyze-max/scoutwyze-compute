@@ -12,13 +12,32 @@ import type { X402PaymentRequirements, X402PaymentSubmission } from "../api/midd
  *
  * Request/response shapes verified 2026-09-26 directly against
  * PayAI's own live OpenAPI description (payai.network/openapi.json,
- * SettleRequest/SettleResponse schemas) — real fields, not guessed:
- * `{x402Version, paymentPayload, paymentRequirements}` in, `{success,
- * transaction, network, payer?, errorReason?, errorMessage?}` out.
- * "Ordinary exact payments can use the available free tier without
- * merchant credentials" per PayAI's own docs — no API key wired here,
- * deliberately, matching that.
+ * VerifyRequest/VerifyResponse/SettleRequest/SettleResponse schemas)
+ * — real fields, not guessed. "Ordinary exact payments can use the
+ * available free tier without merchant credentials" per PayAI's own
+ * docs — no API key wired here, deliberately, matching that.
+ *
+ * verify() is called before settle() (2026-09-26) for two real
+ * reasons, not one: (1) it fails fast on a bad/underfunded payload
+ * without wasting a settlement attempt, and (2) real settlements
+ * alone were confirmed NOT to trigger PayAI Bazaar catalog listing
+ * (checked live: a real successful /settle from this server did not
+ * appear in GET /discovery/resources) — verify() carries the
+ * `serverExtensions.bazaar` field /settle has no room for, which is
+ * the most plausible remaining mechanism for actual Bazaar
+ * discoverability. Confirmed live that serverExtensions alone (an
+ * isValid:false verify call) doesn't register a resource either —
+ * the working theory is the full real sequence (valid verify with
+ * serverExtensions, then settle) is what's required; see SOT.md §6
+ * for whether that's been confirmed by the time you're reading this.
  */
+export interface FacilitatorVerifyResult {
+  isValid: boolean;
+  invalidReason?: string;
+  invalidMessage?: string;
+  payer?: string;
+}
+
 export interface FacilitatorSettleResult {
   success: boolean;
   transaction: string;
@@ -32,6 +51,11 @@ export interface FacilitatorSettleResult {
 // and swappable, same reasoning as MinimalChainReader in
 // baseVerification.ts: tests inject a fake, no real network call.
 export interface MinimalFacilitatorClient {
+  verify(
+    paymentPayload: X402PaymentSubmission,
+    paymentRequirements: X402PaymentRequirements,
+    serverExtensions?: Record<string, unknown>,
+  ): Promise<FacilitatorVerifyResult>;
   settle(paymentPayload: X402PaymentSubmission, paymentRequirements: X402PaymentRequirements): Promise<FacilitatorSettleResult>;
 }
 
@@ -39,6 +63,57 @@ const DEFAULT_FACILITATOR_BASE_URL = "https://facilitator.payai.network";
 
 export class PayAiFacilitatorClient implements MinimalFacilitatorClient {
   constructor(private readonly baseUrl: string = DEFAULT_FACILITATOR_BASE_URL) {}
+
+  async verify(
+    paymentPayload: X402PaymentSubmission,
+    paymentRequirements: X402PaymentRequirements,
+    serverExtensions?: Record<string, unknown>,
+  ): Promise<FacilitatorVerifyResult> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          x402Version: 1,
+          paymentPayload,
+          paymentRequirements,
+          ...(serverExtensions ? { serverExtensions } : {}),
+        }),
+      });
+    } catch (err) {
+      return {
+        isValid: false,
+        invalidReason: "service_unavailable",
+        invalidMessage: `Failed to reach PayAI facilitator: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      return {
+        isValid: false,
+        invalidReason: "service_unavailable",
+        invalidMessage: `PayAI returned HTTP ${res.status} with a non-JSON body`,
+      };
+    }
+
+    const b = body as Partial<{ isValid: boolean; invalidReason: string; payer: string }>;
+    if (typeof b.isValid !== "boolean") {
+      return {
+        isValid: false,
+        invalidReason: "service_unavailable",
+        invalidMessage: `PayAI response did not match the expected VerifyResponse shape (HTTP ${res.status})`,
+      };
+    }
+    return {
+      isValid: b.isValid,
+      invalidReason: b.invalidReason,
+      payer: b.payer,
+    };
+  }
 
   async settle(paymentPayload: X402PaymentSubmission, paymentRequirements: X402PaymentRequirements): Promise<FacilitatorSettleResult> {
     let res: Response;
