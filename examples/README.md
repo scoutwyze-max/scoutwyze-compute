@@ -11,6 +11,9 @@ prepaid Bearer key, or x402/USDC-on-Base with zero signup.
 - **`langchain_tool.py`** — wraps `python_client.py` as a LangChain
   `StructuredTool` (`pip install langchain-core eth_account`), for
   dropping into an existing LangChain agent's toolset.
+- **`haystack_tool.py`** — wraps `python_client.py` as a Haystack
+  `Tool` (`pip install haystack-ai eth_account`), for dropping into an
+  existing Haystack Agent's toolset.
 
 ## The x402 rail is the real "exact" EVM scheme (2026-09-26)
 
@@ -27,9 +30,15 @@ facilitator (PayAI) broadcasts the settlement and pays gas.
 
 Real verification, not just "it imports cleanly":
 
-- **Bearer rail** — all three clients called the live dev server
+- **Bearer rail** — all four clients called the live dev server
   end-to-end and got correct, correctly-shaped, correctly-zero-charged
   responses.
+- **`haystack_tool.py` specifically** — invoked as a real Haystack
+  `Tool.invoke()` call (not just imported) against live production:
+  once with a bad key (got the real 402 challenge back, proving the
+  unrecognized-key-falls-through-to-x402 path plumbs through
+  correctly), once with a real signed-up + admin-credited key (got a
+  real 200 with the full ranked envelope) — 2026-09-26.
 - **EIP-3009 domain and typehash** — independently confirmed against
   real on-chain calls to the USDC contract on Base (`name()`,
   `version()`, `DOMAIN_SEPARATOR()`, `TRANSFER_WITH_AUTHORIZATION_TYPEHASH()`),
