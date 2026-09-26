@@ -38,7 +38,8 @@ curl -X POST https://scoutwyze-compute.fly.dev/v1/compute/rank \
 ```
 
 - **`GET /llms.txt`** and **`GET /openapi.json`** — full machine-readable API description, both rails, the x402 error-code vocabulary, everything below.
-- **`examples/`** — copy-pasteable Node.js and Python clients (both rails, including a real x402 sign-and-pay flow), plus a LangChain `Tool` wrapper.
+- **`examples/`** — copy-pasteable Node.js and Python clients (both rails, including a real x402 sign-and-pay flow), plus LangChain and Haystack `Tool` wrappers.
+- **`scoutwyze-compute`** on [PyPI](https://pypi.org/project/scoutwyze-compute/) — same client/LangChain/Haystack code as `examples/`, packaged: `pip install "scoutwyze-compute[all]"`.
 - **`@scoutwyze/compute-mcp`** on [npm](https://www.npmjs.com/package/@scoutwyze/compute-mcp) — MCP server for Claude Desktop/Cursor: `npx -y @scoutwyze/compute-mcp`. Also listed in the [official MCP Registry](https://registry.modelcontextprotocol.io) (`io.github.scoutwyze-max/compute-mcp`) and [Smithery](https://smithery.ai/servers/scoutwyze/compute-mcp) (`scoutwyze/compute-mcp`).
 
 ## V1 scope
@@ -120,8 +121,9 @@ scripts/
 tests/
   unit/                      Pure-function coverage: cost math, risk scoring, filtering, provenance separation, payments
   integration/                Full HTTP flow via Fastify inject(): auth, fail-closed behavior, signup/checkout, webhooks
-examples/                    Copy-pasteable Node.js/Python clients (dual-rail) + a LangChain Tool wrapper — see examples/README.md
+examples/                    Copy-pasteable Node.js/Python clients (dual-rail) + LangChain/Haystack Tool wrappers — see examples/README.md
 mcp-server/                  Separate, independently-published MCP server package (@scoutwyze/compute-mcp) wrapping this API for MCP-native hosts — see mcp-server/README.md
+python-sdk/                  Separate, independently-published Python package (scoutwyze-compute on PyPI) — the same client/LangChain/Haystack code as examples/, packaged and pip-installable
 ```
 
 ## Deployment
