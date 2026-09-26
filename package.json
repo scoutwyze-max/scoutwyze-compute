@@ -2,6 +2,7 @@
   "name": "scoutwyze-compute",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Autonomous GPU placement recommendation and routing decision engine for AI infrastructure agents and MLOps pipelines.",
   "scripts": {
