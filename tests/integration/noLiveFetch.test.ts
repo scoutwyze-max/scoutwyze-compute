@@ -14,6 +14,7 @@ import type { ProviderAdapter } from "../../src/providers/types.js";
 import type { ProviderObservedFacts } from "../../src/types/schema.js";
 
 const TEST_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9";
+const TEST_PUBLIC_BASE_URL = "https://test.scoutwyze.example";
 
 let app: FastifyInstance | undefined;
 
@@ -84,6 +85,7 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
       facilitator,
       treasuryAddress: TEST_TREASURY_ADDRESS,
       quoteTtlSeconds: 300,
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
     });
 
     // 5 real HTTP requests through the actual route handler.
@@ -125,6 +127,7 @@ describe("Background Ingestion Rule — the route handler never fetches live", (
       facilitator,
       treasuryAddress: TEST_TREASURY_ADDRESS,
       quoteTtlSeconds: 300,
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
     });
     await app.inject({ method: "POST", url: "/v1/route/quote", headers: { authorization: `Bearer ${API_KEY}` }, payload: {} });
     expect(fetchSpy).toHaveBeenCalledTimes(1); // request added nothing

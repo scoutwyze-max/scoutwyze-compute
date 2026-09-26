@@ -27,6 +27,14 @@ export interface RankRouteDeps {
   facilitator: MinimalFacilitatorClient;
   treasuryAddress: string;
   routePriceUsdc?: number;
+  // Absolute origin (e.g. "https://scoutwyze-compute.fly.dev") used to
+  // build the x402 `resource` field as a real fetchable URL, not just
+  // a path — PayAI's Bazaar catalog documents `resource` as "URL of
+  // the payable resource" and its real entries are all absolute URLs
+  // (confirmed live 2026-09-26 against GET /discovery/resources); a
+  // bare path gives its indexer nothing to crawl back to read our own
+  // `extensions.bazaar` declaration from.
+  publicBaseUrl: string;
   // Real gap closed 2026-09-22 (Robert: "Production path is RunPod
   // only... do not recommend a provider we will 401/unsupported") —
   // required, not optional, so a route can't accidentally recommend a
@@ -178,7 +186,7 @@ export function registerRankRoute(app: FastifyInstance, deps: RankRouteDeps): vo
         facilitator: deps.facilitator,
         treasuryAddress: deps.treasuryAddress,
         routePriceUsdc,
-        resource: "/v1/compute/rank",
+        resource: `${deps.publicBaseUrl}/v1/compute/rank`,
         bazaarExtension: RANK_BAZAAR_EXTENSION,
       });
       if (!x402Result.ok) return; // verifyX402Payment already sent the 402 challenge

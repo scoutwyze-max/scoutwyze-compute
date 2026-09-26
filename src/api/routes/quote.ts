@@ -21,6 +21,9 @@ export interface QuoteRouteDeps {
   treasuryAddress: string;
   quoteTtlSeconds: number;
   routePriceUsdc?: number;
+  // See RankRouteDeps.publicBaseUrl in rank.ts for why this needs to
+  // be a real absolute origin, not omitted.
+  publicBaseUrl: string;
 }
 
 export function registerQuoteRoute(app: FastifyInstance, deps: QuoteRouteDeps): void {
@@ -33,6 +36,7 @@ export function registerQuoteRoute(app: FastifyInstance, deps: QuoteRouteDeps): 
     facilitator: deps.facilitator,
     treasuryAddress: deps.treasuryAddress,
     routePriceUsdc: deps.routePriceUsdc,
+    publicBaseUrl: deps.publicBaseUrl,
   });
 
   // Order matters: validate BEFORE auth/billing, so a malformed request

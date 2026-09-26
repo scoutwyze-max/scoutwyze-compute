@@ -15,6 +15,7 @@ import { FakeFacilitatorClient } from "../helpers/fakeFacilitator.js";
 import type { ProviderAdapter } from "../../src/providers/types.js";
 
 const TEST_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9";
+const TEST_PUBLIC_BASE_URL = "https://test.scoutwyze.example";
 
 let app: FastifyInstance | undefined;
 
@@ -57,6 +58,7 @@ async function buildAppWithBrokenCoreweave(): Promise<FastifyInstance> {
     facilitator,
     treasuryAddress: TEST_TREASURY_ADDRESS,
     quoteTtlSeconds: 300,
+    publicBaseUrl: TEST_PUBLIC_BASE_URL,
   });
   return built;
 }
@@ -126,6 +128,7 @@ describe("CLAUDE.md §2 Fail-Closed Rule", () => {
       facilitator,
       treasuryAddress: TEST_TREASURY_ADDRESS,
       quoteTtlSeconds: 300,
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
     });
     app = built;
 

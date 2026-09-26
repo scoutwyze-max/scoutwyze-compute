@@ -84,7 +84,8 @@ const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 // documented defaults, not considered business choices.
 const RUNPOD_IMAGE = process.env.RUNPOD_IMAGE || "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel";
 const RUNPOD_DISK_GB = Number(process.env.RUNPOD_DISK_GB ?? 50);
-// Used in landing-page/llms.txt curl examples only — never used for
+// Used in landing-page/llms.txt curl examples, and (2026-09-26) as the
+// origin for the x402 `resource` field sent to PayAI — never used for
 // anything security-sensitive (no redirect, no CORS origin check).
 const BASE_URL = process.env.BASE_URL || "https://scoutwyze-compute.fly.dev";
 // Real gap closed 2026-09-23 (Robert: "If /book is not end-to-end
@@ -165,6 +166,7 @@ async function main() {
     treasuryAddress: BASE_TREASURY_ADDRESS,
     quoteTtlSeconds: QUOTE_TTL_SECONDS,
     routePriceUsdc: ROUTE_PRICE_USDC,
+    publicBaseUrl: BASE_URL,
   });
   // Production is RunPod-only (Robert, 2026-09-22): lambda_labs is
   // deliberately never registered here, regardless of any leftover
@@ -193,6 +195,7 @@ async function main() {
     treasuryAddress: BASE_TREASURY_ADDRESS,
     routePriceUsdc: ROUTE_PRICE_USDC,
     bookableProviders,
+    publicBaseUrl: BASE_URL,
   });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
   registerSampleRoute(app, { cache, bookableProviders, requestLog });

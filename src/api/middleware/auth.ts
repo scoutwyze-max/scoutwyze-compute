@@ -43,6 +43,10 @@ export interface AuthMiddlewareDeps {
   facilitator: MinimalFacilitatorClient;
   treasuryAddress: string;
   routePriceUsdc?: number;
+  // Absolute origin used to build the x402 `resource` field as a real
+  // fetchable URL — see RankRouteDeps.publicBaseUrl in rank.ts for the
+  // full reasoning (same fix, same root cause).
+  publicBaseUrl: string;
 }
 
 export interface X402VerifyDeps {
@@ -289,7 +293,7 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps) {
       facilitator: deps.facilitator,
       treasuryAddress: deps.treasuryAddress,
       routePriceUsdc,
-      resource: "/v1/route/quote",
+      resource: `${deps.publicBaseUrl}/v1/route/quote`,
     });
     if (result.ok) {
       request.authContext = { rail: "x402", identifier: result.nonce.slice(0, 10) };

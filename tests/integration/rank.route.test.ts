@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { buildTestApp, type TestApp } from "./testApp.js";
+import { buildTestApp, type TestApp, TEST_PUBLIC_BASE_URL } from "./testApp.js";
 import { createTestPayerWallet, buildEip3009Authorization, signEip3009Authorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
 
 /** Drives a real challenge -> payment -> paid-request cycle against
@@ -15,7 +15,7 @@ async function payAndRank(app: TestApp, body: Record<string, unknown> = {}) {
   // "/v1/route/quote" on every challenge regardless of which route
   // issued it. Asserted on every payAndRank call, not just once, so it
   // can't quietly regress in one code path and not another.
-  expect(requirements.resource).toBe("/v1/compute/rank");
+  expect(requirements.resource).toBe(`${TEST_PUBLIC_BASE_URL}/v1/compute/rank`);
 
   const wallet = createTestPayerWallet();
   const amountUsdc = Number(requirements.maxAmountRequired) / 1_000_000; // atomic units -> USD

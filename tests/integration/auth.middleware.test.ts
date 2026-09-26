@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { buildTestApp, type TestApp } from "./testApp.js";
+import { buildTestApp, type TestApp, TEST_PUBLIC_BASE_URL } from "./testApp.js";
 import { createTestPayerWallet, buildEip3009Authorization, signEip3009Authorization, encodeX402Payment } from "../helpers/x402TestHelpers.js";
 import { encodeUsdcTransferLog, fakeFailedReceipt } from "../helpers/fakeUsdcTransfer.js";
 
@@ -126,7 +126,7 @@ describe("dual-rail auth — Secondary Path (x402), CLAUDE.md §4 — real EIP-3
     // compute/rank: resource used to be hardcoded regardless of which
     // route issued the challenge. Asserted here on quote's side too,
     // so a future regression can't silently break either route.
-    expect(requirements.resource).toBe("/v1/route/quote");
+    expect(requirements.resource).toBe(`${TEST_PUBLIC_BASE_URL}/v1/route/quote`);
   });
 
   it("a payment with a real EIP-3009 signature, settled and independently re-verified on-chain, succeeds and returns a signed receipt header", async () => {

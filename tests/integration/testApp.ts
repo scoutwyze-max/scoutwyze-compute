@@ -36,6 +36,7 @@ const TEST_STARTING_BALANCE_USD = 1000; // generous — most tests aren't exerci
 export const TEST_ADMIN_SECRET = "test-admin-secret";
 export const TEST_STRIPE_WEBHOOK_SECRET = "test-stripe-webhook-secret";
 export const TEST_TREASURY_ADDRESS = "0xc132a315a05541a4b72c272de539eb86de977fb9";
+export const TEST_PUBLIC_BASE_URL = "https://test.scoutwyze.example";
 
 export interface TestApp {
   app: FastifyInstance;
@@ -105,6 +106,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
     facilitator,
     treasuryAddress: TEST_TREASURY_ADDRESS,
     quoteTtlSeconds: 300,
+    publicBaseUrl: TEST_PUBLIC_BASE_URL,
   });
   registerAdminRoutes(app, { apiKeyStore, creditLedger, adminSecret: TEST_ADMIN_SECRET });
   registerStripeWebhookRoute(app, { db, creditLedger, webhookSecret: TEST_STRIPE_WEBHOOK_SECRET });
@@ -135,6 +137,7 @@ export async function buildTestApp(options: BuildTestAppOptions = {}): Promise<T
     treasuryAddress: TEST_TREASURY_ADDRESS,
     routePriceUsdc: 0.15,
     bookableProviders,
+    publicBaseUrl: TEST_PUBLIC_BASE_URL,
   });
   registerBookRoute(app, { cache, apiKeyStore, creditLedger, bookers });
   registerSampleRoute(app, { cache, bookableProviders, requestLog });
